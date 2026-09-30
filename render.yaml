@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: placement-portal
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: "./build.sh"
+    startCommand: "uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.8
+      - key: NODE_VERSION
+        value: 20.11.0
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        value: sqlite:///./placement_portal.db
+      - key: FRONTEND_ORIGIN
+        value: "*"
+      - key: SMS_ENV
+        value: dev
+      - key: PROJECT_NAME
+        value: "AI-Powered Placement Intelligence Platform"
