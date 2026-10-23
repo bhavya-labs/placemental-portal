@@ -1,0 +1,43 @@
+name: Keep Render Portal Awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-portal-keep-alive
+  cancel-in-progress: false
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping Render application
+        env:
+          PORTAL_URL: https://placement-portal-n570.onrender.com/
+        run: |
+          set -eu
+          echo "Checking the deployed AP-CPIP portal..."
+          HTTP_STATUS=$(curl \
+            --silent \
+            --show-error \
+            --location \
+            --max-time 120 \
+            --output /dev/null \
+            --write-out "%{http_code}" \
+            "$PORTAL_URL") || {
+            echo "Request failed or timed out."
+            exit 1
+          }
+          echo "HTTP status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 400 ]; then
+            echo "The server returned a successful HTTP response."
+          else
+            echo "The server returned an unsuccessful HTTP response."
+            exit 1
+          fi
