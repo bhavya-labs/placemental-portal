@@ -94,7 +94,7 @@ def test_department_rbac_strictly_enforced_for_filtered_students(client, db_sess
 def test_all_students_directory_status_filter_normalized(client, db_session):
     """
     Ensure the general student directory (/api/students) also correctly filters by 'At Risk'
-    and matches the count.
+    and matches the count, identity, and attributes of the database records.
     """
     cse_faculty = db_session.query(User).filter(User.email == "faculty.cse@platform.edu").first()
     token = create_access_token(data={"sub": cse_faculty.email, "role": "faculty"})
@@ -108,6 +108,24 @@ def test_all_students_directory_status_filter_normalized(client, db_session):
     assert resp.status_code == 200
     data = resp.json()
     items = data["items"]
-    assert len(items) == 44
+    expected_students = db_session.query(Student).filter(
+        Student.dept_id == dept_id,
+        Student.batch == "2026",
+        Student.status == "At Risk"
+    ).all()
+    assert len(items) == len(expected_students)
+    assert len(expected_students) > 0
+
+    expected_ids = {s.id for s in expected_students}
+    returned_ids = {item["id"] for item in items}
+    assert returned_ids == expected_ids, "Returned student IDs do not match database records"
+
     for item in items:
-        assert item["status"] == "At Risk"
+        assert item["status"] == "At Risk", f"Student {item.get('name')} does not have status 'At Risk'"
+        assert item["dept_id"] == dept_id
+        assert item["batch"] == "2026"
+        assert "name" in item
+        assert "email" in item
+        assert "cgpa" in item
+        assert "attendance" in item
+        assert "backlogs" in item
