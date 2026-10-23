@@ -1,9 +1,27 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.PROD ? '' : 'http://127.0.0.1:8000');
+const resolveApiBaseUrl = (): string => {
+  // 1. Explicit build-time or runtime environment variable takes highest precedence
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
+  }
+  // 2. Automated fallback when deployed on GitHub Pages domain
+  if (typeof window !== 'undefined' && window.location.hostname.endsWith('github.io')) {
+    return 'https://placement-portal-n570.onrender.com';
+  }
+  // 3. Local Vite development mode
+  if (import.meta.env.DEV) {
+    return 'http://127.0.0.1:8000';
+  }
+  // 4. Unified single-origin production deployment fallback
+  return '';
+};
+
+const API_BASE_URL = resolveApiBaseUrl();
 
 const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 60000, // 60s timeout to allow Render container to wake up from cold standby
 });
 
 // Auto-inject JWT token to all requests if present in localStorage
@@ -44,7 +62,10 @@ api.interceptors.response.use(
         if (storedToken) {
           localStorage.removeItem('token');
           localStorage.removeItem('user');
-          const loginTarget = userRole === 'parent' ? '/parent/login' : '/login';
+          const basePath = (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL)
+            ? import.meta.env.BASE_URL.replace(/\/$/, '')
+            : '';
+          const loginTarget = `${basePath}${userRole === 'parent' ? '/parent/login' : '/login'}`;
           if (window.location.pathname !== loginTarget) {
             window.location.href = loginTarget;
           }

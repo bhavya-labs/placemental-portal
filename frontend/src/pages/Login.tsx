@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { GraduationCap, Eye, EyeOff, Lock, Mail, AlertCircle, Info } from 'lucide-react';
+import { GraduationCap, Eye, EyeOff, Lock, Mail, AlertCircle } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const { login, user, loading } = useAuth();
@@ -19,17 +19,6 @@ export const Login: React.FC = () => {
   const handleTabChange = (role: 'student' | 'faculty' | 'admin') => {
     setActiveTab(role);
     setError(null);
-    // Autofill helpful defaults for demo evaluation convenience!
-    if (role === 'student') {
-      setEmail('student1@platform.edu');
-      setPassword('password123');
-    } else if (role === 'faculty') {
-      setEmail('faculty.cse@platform.edu');
-      setPassword('password123');
-    } else {
-      setEmail('admin@platform.edu');
-      setPassword('password123');
-    }
   };
 
   // Redirect if already authenticated
@@ -46,12 +35,6 @@ export const Login: React.FC = () => {
       }
     }
   }, [user, loading, navigate]);
-
-  // Seed default credentials on initial render to make evaluation super fast
-  React.useEffect(() => {
-    setEmail('student1@platform.edu');
-    setPassword('password123');
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,10 +70,17 @@ export const Login: React.FC = () => {
         navigate('/student');
       }
     } catch (err: any) {
-      setError(
-        err.response?.data?.detail || 
-        'Authentication failed. Please verify email and password.'
-      );
+      if (!err.response) {
+        setError(
+          'Unable to reach backend service. The cloud server may be waking up from standby (Render Free tier). ' +
+          'Please wait up to 30–45 seconds and try again.'
+        );
+      } else {
+        setError(
+          err.response?.data?.detail || 
+          'Authentication failed. Please verify email and password.'
+        );
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -171,16 +161,6 @@ export const Login: React.FC = () => {
               </div>
             )}
 
-            {/* Helper Alert displaying credentials for evaluation */}
-            <div className="bg-sky-50 dark:bg-sky-950/25 border border-sky-200/50 dark:border-sky-900/30 rounded p-3 text-xs text-slate-600 dark:text-slate-400 flex gap-2">
-              <Info size={14} className="text-gov-blue shrink-0 mt-0.5" aria-hidden="true" />
-              <div>
-                <p className="font-semibold text-slate-700 dark:text-slate-300">Quick-Fill Demo Account:</p>
-                <p className="font-mono mt-0.5">User: {email}</p>
-                <p className="font-mono">Pass: password123</p>
-              </div>
-            </div>
-
             <div>
               <label htmlFor="login-email-input" className="block text-xs font-bold uppercase tracking-wider text-slate-650 dark:text-slate-400">
                 Official Email Address
@@ -197,7 +177,7 @@ export const Login: React.FC = () => {
                   required
                   aria-required="true"
                   className="w-full pl-10 pr-4 py-2.5 border border-gov-border dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-gov-blue text-sm"
-                  placeholder="e.g. name@platform.edu"
+                  placeholder="name@institution.edu"
                 />
               </div>
             </div>
@@ -227,7 +207,7 @@ export const Login: React.FC = () => {
                   required
                   aria-required="true"
                   className="w-full pl-10 pr-10 py-2.5 border border-gov-border dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-gov-blue text-sm"
-                  placeholder="••••••••"
+                  placeholder="Enter your password"
                 />
                 <button
                   type="button"

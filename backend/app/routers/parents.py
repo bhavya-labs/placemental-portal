@@ -35,13 +35,19 @@ class SMSProvider:
         raise NotImplementedError
 
 class DevelopmentSMSProvider(SMSProvider):
+    def __init__(self):
+        # In-memory record for test suite inspection, never logged to stdout
+        self.last_dispatched_otp: dict[str, str] = {}
+
     def send_otp(self, phone: str, otp: str):
-        print(f"\n[SMS SIMULATOR - DEV] OTP for parent {phone}: {otp}\n")
+        self.last_dispatched_otp[phone] = otp
+        masked = (phone[:3] + "..." + phone[-2:]) if len(phone) >= 5 else phone
+        print(f"[SMS Provider - Dev] Simulated dispatch recorded for {masked}. (No external SMS gateway configured)")
 
 class ProductionSMSProvider(SMSProvider):
     def send_otp(self, phone: str, otp: str):
-        # production provider console logs simulated dispatch for demo testing
-        print(f"\n[SMS DISPATCH - PROD] OTP dispatched successfully to {phone}. (OTP secret hidden)\n")
+        masked = (phone[:3] + "..." + phone[-2:]) if len(phone) >= 5 else phone
+        print(f"[SMS Provider - Prod] Dispatch triggered for {masked}. (No external SMS gateway configured)")
 
 sms_provider = ProductionSMSProvider() if settings.SMS_ENV == "prod" else DevelopmentSMSProvider()
 
@@ -121,15 +127,12 @@ def request_parent_otp(req: ParentOTPRequest, db: Session = Depends(get_db)):
     # Dispatch via SMS Provider
     sms_provider.send_otp(req.mobile_number, otp)
 
-    # SECURE: return NO OTP in response body in production; include otp_debug for dev/testing
+    # SECURE: return NO OTP values in response body to prevent disclosure
     response_payload = {
         "success": True,
-        "message": "OTP generated successfully and sent to registered parent mobile.",
+        "message": "OTP generated successfully. Please check your registered mobile device.",
         "expires_in": settings.OTP_EXPIRY_MINUTES * 60
     }
-    if settings.SMS_ENV != "prod":
-        response_payload["otp_debug"] = otp
-        
     return response_payload
 
 

@@ -63,7 +63,7 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode; allowedRoles: string
 
 export const App: React.FC = () => {
   return (
-    <Router>
+    <Router basename={import.meta.env.BASE_URL}>
       <AuthProvider>
         <Routes>
           {/* Public Gateway routes */}

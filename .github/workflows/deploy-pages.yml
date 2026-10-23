@@ -1,0 +1,70 @@
+name: Manual Deploy Frontend to GitHub Pages
+
+# Initial release safeguard: Run manually on-demand via Actions tab only.
+# Strictly NO automatic push triggers on main branch.
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Production Backend API Base URL"
+        required: false
+        default: "https://placement-portal-n570.onrender.com"
+        type: string
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment at a time
+concurrency:
+  group: "github-pages"
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build Frontend for GitHub Pages
+        working-directory: frontend
+        env:
+          VITE_DEPLOY_TARGET: gh-pages
+          VITE_BASE_PATH: /placemental-portal/
+          VITE_API_BASE_URL: ${{ inputs.api_base_url || 'https://placement-portal-n570.onrender.com' }}
+        run: npm run build
+
+      - name: Verify Build Artifacts and SPA Fallback
+        run: |
+          test -f frontend/dist/index.html || { echo "ERROR: dist/index.html is missing!"; exit 1; }
+          test -f frontend/dist/404.html || { echo "ERROR: dist/404.html is missing!"; exit 1; }
+          echo "Build artifacts verified: index.html and 404.html present."
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

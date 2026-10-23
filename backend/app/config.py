@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./placement_portal.db"
 
     # CORS Allowed Origins (comma-separated list for Vite dev and production)
-    FRONTEND_ORIGIN: str = "http://localhost:5173,http://127.0.0.1:5173"
+    FRONTEND_ORIGIN: str = "http://localhost:5173,http://127.0.0.1:5173,https://bhavya-labs.github.io"
 
     # Login Rate Limiting (Phase 1 Security Hardening)
     LOGIN_MAX_FAILED_ATTEMPTS: int = 5
@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     OTP_RATE_LIMIT_WINDOW_HOURS: int = 1
     OTP_MAX_VERIFY_ATTEMPTS: int = 3
     SMS_ENV: str = "dev"
+
+    # Database Seeding Controls (Must be explicitly opted-in; defaults to disabled for safety)
+    ENABLE_DEMO_SEEDING: bool = False
 
     model_config = SettingsConfigDict(
         env_file=str(BASE_DIR / ".env"),

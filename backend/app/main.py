@@ -108,32 +108,24 @@ app = FastAPI(
 allowed_origins = [
     origin.strip()
     for origin in settings.FRONTEND_ORIGIN.split(",")
-    if origin.strip()
+    if origin.strip() and origin.strip() != "*"
 ]
 
 if not allowed_origins:
     allowed_origins = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "https://bhavya-labs.github.io",
     ]
 
-
-if "*" in allowed_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=".*",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=allowed_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+# Restrict production CORS to exact trusted origins (no wildcard regex allowed)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ============================================================
@@ -182,15 +174,19 @@ def startup_event():
         user_count = db.query(User).count()
 
         if user_count == 0:
-            print(
-                "Database is empty. Initiating automatic seeding of "
-                "students, companies, permissions, and related data..."
-            )
-
-            seed_database()
-
-            print("Database seeding completed.")
-
+            if settings.ENABLE_DEMO_SEEDING:
+                print(
+                    "Database is empty and ENABLE_DEMO_SEEDING is enabled. "
+                    "Seeding local development demo dataset..."
+                )
+                seed_database(force=True)
+                print("Database demo seeding completed.")
+            else:
+                print(
+                    "Database contains 0 accounts. "
+                    "Automatic demo seeding is disabled (ENABLE_DEMO_SEEDING=False). "
+                    "Use the administrative CLI to bootstrap initial user accounts."
+                )
         else:
             print(
                 f"Database already contains {user_count} accounts. "
@@ -207,12 +203,12 @@ def startup_event():
         permission_count = db.query(Permission).count()
 
         if permission_count == 0:
-            print(
-                "Permissions table is empty. "
-                "Seeding default permissions for faculty coordinators..."
-            )
-
             faculties = db.query(Faculty).all()
+            if faculties:
+                print(
+                    "Permissions table is empty. "
+                    "Seeding default permissions for faculty coordinators..."
+                )
 
             now = datetime.utcnow()
             start = now - timedelta(days=30)

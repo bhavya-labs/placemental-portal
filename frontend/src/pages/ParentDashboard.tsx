@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { parentService } from '../services/api';
 import { 
   GraduationCap, Briefcase, Calendar, Bell, ClipboardList, CheckCircle2, 
@@ -6,6 +7,7 @@ import {
 } from 'lucide-react';
 
 export const ParentDashboard: React.FC = () => {
+  const navigate = useNavigate();
   const [data, setData] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +45,7 @@ export const ParentDashboard: React.FC = () => {
           <h2 className="text-lg font-bold text-slate-800 dark:text-slate-100">Parent Access Error</h2>
           <p className="text-sm text-slate-500">{error || 'Session could not be verified.'}</p>
           <button
-            onClick={() => window.location.href = '/parent/login'}
+            onClick={() => navigate('/parent/login')}
             className="gov-btn-primary w-full"
           >
             Return to Parent Login

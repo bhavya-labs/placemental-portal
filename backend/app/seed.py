@@ -10,7 +10,15 @@ from backend.app.auth import get_password_hash
 from backend.app.ml.predictor import predictor
 from backend.app.ml.nlp_feedback import nlp_analyzer
 
-def seed_database():
+def seed_database(force: bool = False):
+    from backend.app.config import settings
+    if not settings.ENABLE_DEMO_SEEDING and not force:
+        print(
+            "Demo seeding is disabled by default (ENABLE_DEMO_SEEDING=False). "
+            "To seed demo data, set ENABLE_DEMO_SEEDING=True or call seed_database(force=True)."
+        )
+        return
+
     db = SessionLocal()
     try:
         print("Resetting database...")
@@ -608,4 +616,16 @@ def seed_database():
         db.close()
 
 if __name__ == "__main__":
-    seed_database()
+    import argparse
+    parser = argparse.ArgumentParser(description="Explicitly seed demo dataset into AP-CPIP database.")
+    parser.add_argument(
+        "--confirm-seed",
+        action="store_true",
+        help="Safety confirmation required to reset tables and seed synthetic demo accounts."
+    )
+    args = parser.parse_args()
+    if not args.confirm_seed:
+        print("SAFETY ABORT: Seeding resets database tables and inserts synthetic demo data.")
+        print("To proceed intentionally, execute: python -m backend.app.seed --confirm-seed")
+        sys.exit(1)
+    seed_database(force=True)

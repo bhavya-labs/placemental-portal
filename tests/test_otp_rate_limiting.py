@@ -1,6 +1,7 @@
 import pytest
 from datetime import datetime, timedelta
 from backend.app.models import Student, Parent, ParentOTP
+from backend.app.routers.parents import sms_provider
 
 def test_otp_request_and_cooldown(client, db_session, student_user_and_token):
     student_user, _ = student_user_and_token
@@ -20,8 +21,9 @@ def test_otp_request_and_cooldown(client, db_session, student_user_and_token):
     assert resp1.status_code == 200
     data1 = resp1.json()
     assert data1["success"] is True
-    assert "otp_debug" in data1
-    otp = data1["otp_debug"]
+    # SECURE: OTP must NEVER be disclosed in response payload
+    assert "otp_debug" not in data1
+    assert phone in getattr(sms_provider, "last_dispatched_otp", {})
 
     # 2. Immediate second request triggers cooldown rate limit
     resp2 = client.post("/api/parent/request-otp", json={
@@ -52,7 +54,8 @@ def test_otp_failed_attempts_lockout(client, db_session, student_user_and_token)
         "mobile_number": phone
     })
     assert resp_init.status_code == 200
-    valid_otp = resp_init.json().get("otp_debug")
+    assert "otp_debug" not in resp_init.json()
+    valid_otp = getattr(sms_provider, "last_dispatched_otp", {}).get(phone)
 
     # Send wrong OTP up to max attempts (3 times)
     for i in range(3):
@@ -91,7 +94,9 @@ def test_otp_successful_verification_and_child_access(client, db_session, studen
         "mobile_number": phone
     })
     assert resp_req.status_code == 200
-    otp = resp_req.json()["otp_debug"]
+    assert "otp_debug" not in resp_req.json()
+    otp = getattr(sms_provider, "last_dispatched_otp", {}).get(phone)
+    assert otp is not None
 
     # Verify with correct OTP
     resp_verify = client.post("/api/parent/verify-otp", json={

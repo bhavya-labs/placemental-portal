@@ -16,7 +16,6 @@ export const ParentLogin: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [otpDebug, setOtpDebug] = useState<string | null>(null);
 
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,14 +29,15 @@ export const ParentLogin: React.FC = () => {
     setInfo(null);
 
     try {
-      const res = await parentService.requestOtp(parseInt(rollNumber), mobileNumber);
+      await parentService.requestOtp(parseInt(rollNumber), mobileNumber);
       setStep('verify');
       setInfo('OTP code sent successfully to registered mobile number.');
-      if (res.otp_debug) {
-        setOtpDebug(res.otp_debug);
-      }
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to request OTP. Make sure the roll number and mobile match registered files.');
+      if (!err.response) {
+        setError('Unable to reach backend service. The cloud server may be waking up from standby (Render Free tier). Please retry in 30 seconds.');
+      } else {
+        setError(err.response?.data?.detail || 'Failed to request OTP. Make sure the roll number and mobile match registered files.');
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -67,11 +67,18 @@ export const ParentLogin: React.FC = () => {
       };
       localStorage.setItem('user', JSON.stringify(parentUser));
       
-      // Force reload page to initialize session from storage
-      window.location.href = '/parent/dashboard';
+      // Force reload page to initialize session from storage with correct base path
+      const basePath = (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL)
+        ? import.meta.env.BASE_URL.replace(/\/$/, '')
+        : '';
+      window.location.href = `${basePath}/parent/dashboard`;
     } catch (err: any) {
       setIsSubmitting(false);
-      setError(err.response?.data?.detail || 'Incorrect OTP code. Please try again.');
+      if (!err.response) {
+        setError('Unable to reach backend service. The server may be waking up from standby. Please retry in 30 seconds.');
+      } else {
+        setError(err.response?.data?.detail || 'Incorrect OTP code. Please try again.');
+      }
     }
   };
 
@@ -117,12 +124,6 @@ export const ParentLogin: React.FC = () => {
             </div>
           )}
 
-          {otpDebug && (
-            <div className="bg-sky-50 dark:bg-sky-950/25 border border-sky-200 rounded p-3 text-xs text-slate-650 dark:text-slate-355 mb-4">
-              <p className="font-semibold text-slate-700 dark:text-slate-300">One-Time Password (Development Mode):</p>
-              <p className="font-mono text-sm mt-1 font-bold tracking-wider">{otpDebug}</p>
-            </div>
-          )}
 
           {step === 'request' ? (
             <form className="space-y-5" onSubmit={handleRequestOtp}>
