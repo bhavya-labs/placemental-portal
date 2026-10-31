@@ -1,22 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { driveService } from '../services/api';
+import { driveService, prewarmBackend } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { 
   GraduationCap, ShieldCheck, CheckCircle2, TrendingUp, Users, 
-  MapPin, Calendar, Clock, BarChart3, HelpCircle, BrainCircuit
+  MapPin, Calendar, Clock, BarChart3, HelpCircle, BrainCircuit, Briefcase, RefreshCw
 } from 'lucide-react';
 
 export const LandingPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
   const [activeDrives, setActiveDrives] = useState<any[]>([]);
-  const [stats, setStats] = useState({
-    placementPct: '91.8%',
-    highestPackage: '42.5 LPA',
-    averagePackage: '8.4 LPA',
-    companiesCount: '150+'
-  });
+  const [loadingDrives, setLoadingDrives] = useState<boolean>(true);
+
+  // Proactive background pre-warm on page mount
+  useEffect(() => {
+    prewarmBackend();
+  }, []);
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -33,22 +33,21 @@ export const LandingPage: React.FC = () => {
     }
   }, [user, loading, navigate]);
 
+  const loadDrives = async () => {
+    setLoadingDrives(true);
+    try {
+      const data = await driveService.getPublicActiveDrives();
+      setActiveDrives(Array.isArray(data) ? data.slice(0, 4) : []);
+    } catch (err) {
+      // Do not display fabricated placement drives when backend is unavailable
+      console.warn('Live active drives currently unavailable');
+      setActiveDrives([]);
+    } finally {
+      setLoadingDrives(false);
+    }
+  };
+
   useEffect(() => {
-    // Attempt to load live drives from public API
-    const loadDrives = async () => {
-      try {
-        const data = await driveService.getPublicActiveDrives();
-        setActiveDrives(data.slice(0, 5));
-      } catch (err) {
-        console.warn('API not accessible, loading landing page with mock drives');
-        setActiveDrives([
-          { id: 1, company_name: 'Google', role: 'Software Engineer', package_lpa: 32, location: 'Hyderabad', cgpa_cutoff: 8.0, deadline: '2026-08-10' },
-          { id: 2, company_name: 'Microsoft', role: 'Data Scientist', package_lpa: 28, location: 'Bengaluru', cgpa_cutoff: 7.5, deadline: '2026-08-12' },
-          { id: 3, company_name: 'TCS', role: 'System Engineer', package_lpa: 4.5, location: 'Chennai', cgpa_cutoff: 6.0, deadline: '2026-08-15' },
-          { id: 4, company_name: 'Goldman Sachs', role: 'Financial Analyst', package_lpa: 16, location: 'Bengaluru', cgpa_cutoff: 7.0, deadline: '2026-08-20' }
-        ]);
-      }
-    };
     loadDrives();
   }, []);
 
@@ -108,27 +107,35 @@ export const LandingPage: React.FC = () => {
           <div className="hidden md:flex justify-center">
             <div className="bg-slate-800/80 border border-slate-700 p-6 rounded-xl shadow-2xl w-full max-w-md relative overflow-hidden">
               <div className="absolute top-0 right-0 w-24 h-24 bg-gov-blue/20 rounded-full blur-2xl"></div>
-              <h3 className="text-sm font-semibold text-sky-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                <BarChart3 size={16} /> Live Statistics Summary
+              <h3 className="text-sm font-semibold text-sky-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                <BarChart3 size={16} /> Institutional Placement Framework
               </h3>
+              <p className="text-[11px] text-slate-400 mb-4">Centralized operations & role-based workflows</p>
               
-              <div className="grid grid-cols-2 gap-6">
-                <div className="space-y-1">
-                  <p className="text-xs text-slate-400">Total Placement Rate</p>
-                  <p className="text-2xl font-bold text-white">{stats.placementPct}</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg p-3 space-y-1">
+                  <p className="text-[11px] font-semibold text-slate-400 uppercase">Authorized Roles</p>
+                  <p className="text-xs font-bold text-white">Student, Faculty, HOD, TPO, Parent</p>
                 </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-slate-400">Highest Package Offered</p>
-                  <p className="text-2xl font-bold text-white">{stats.highestPackage}</p>
+                <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg p-3 space-y-1">
+                  <p className="text-[11px] font-semibold text-slate-400 uppercase">Drive Coordination</p>
+                  <p className="text-xs font-bold text-white">Direct Application & Eligibility Gates</p>
                 </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-slate-400">Average Annual Package</p>
-                  <p className="text-2xl font-bold text-white">{stats.averagePackage}</p>
+                <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg p-3 space-y-1">
+                  <p className="text-[11px] font-semibold text-slate-400 uppercase">Readiness Engine</p>
+                  <p className="text-xs font-bold text-white">Automated Preparation & Gap Analysis</p>
                 </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-slate-400">Partnered Recruiters</p>
-                  <p className="text-2xl font-bold text-white">{stats.companiesCount}</p>
+                <div className="bg-slate-900/60 border border-slate-700/60 rounded-lg p-3 space-y-1">
+                  <p className="text-[11px] font-semibold text-slate-400 uppercase">Historical Analytics</p>
+                  <p className="text-xs font-bold text-sky-400">Available in T&P Dashboard</p>
                 </div>
+              </div>
+
+              <div className="mt-4 pt-3 border-t border-slate-700/60 flex items-center justify-between text-[11px] text-slate-400">
+                <span>Verified Departmental Records</span>
+                <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                  <ShieldCheck size={12} /> RBAC Protected
+                </span>
               </div>
             </div>
           </div>
@@ -210,44 +217,76 @@ export const LandingPage: React.FC = () => {
           </div>
 
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {activeDrives.map((drive, idx) => (
-              <div 
-                key={drive.id || idx} 
-                className="border border-slate-200 rounded-lg p-5 bg-slate-50 flex flex-col justify-between hover:border-slate-300 transition-colors"
-              >
-                <div className="space-y-3">
-                  <div className="flex justify-between items-start">
-                    <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                      {drive.company_name}
-                    </span>
-                    <span className="bg-gov-navy text-white text-[10px] font-bold px-2 py-0.5 rounded uppercase">
-                      {drive.package_lpa} LPA
-                    </span>
+            {loadingDrives ? (
+              [1, 2, 3, 4].map((i) => (
+                <div key={i} className="border border-slate-200 rounded-lg p-5 bg-slate-50 space-y-4 animate-pulse">
+                  <div className="flex justify-between items-center">
+                    <div className="h-3 bg-slate-200 rounded w-20"></div>
+                    <div className="h-4 bg-slate-200 rounded w-12"></div>
                   </div>
-                  <h4 className="text-sm font-bold text-slate-800 uppercase leading-snug">
-                    {drive.role}
-                  </h4>
-                  <div className="space-y-1.5 text-xs text-slate-500">
-                    <p className="flex items-center gap-1.5">
-                      <MapPin size={12} /> {drive.location}
-                    </p>
-                    <p className="flex items-center gap-1.5">
-                      <Clock size={12} /> Cutoff: {drive.cgpa_cutoff} CGPA
-                    </p>
+                  <div className="h-4 bg-slate-200 rounded w-32"></div>
+                  <div className="space-y-2">
+                    <div className="h-3 bg-slate-200 rounded w-24"></div>
+                    <div className="h-3 bg-slate-200 rounded w-28"></div>
                   </div>
                 </div>
+              ))
+            ) : activeDrives.length > 0 ? (
+              activeDrives.map((drive, idx) => (
+                <div 
+                  key={drive.id || idx} 
+                  className="border border-slate-200 rounded-lg p-5 bg-slate-50 flex flex-col justify-between hover:border-slate-300 transition-colors"
+                >
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-start">
+                      <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                        {drive.company_name}
+                      </span>
+                      <span className="bg-gov-navy text-white text-[10px] font-bold px-2 py-0.5 rounded uppercase">
+                        {drive.package_lpa} LPA
+                      </span>
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-800 uppercase leading-snug">
+                      {drive.role}
+                    </h4>
+                    <div className="space-y-1.5 text-xs text-slate-500">
+                      <p className="flex items-center gap-1.5">
+                        <MapPin size={12} /> {drive.location}
+                      </p>
+                      <p className="flex items-center gap-1.5">
+                        <Clock size={12} /> Cutoff: {drive.cgpa_cutoff} CGPA
+                      </p>
+                    </div>
+                  </div>
 
-                <div className="border-t border-slate-200 mt-4 pt-3 flex items-center justify-between text-xs">
-                  <span className="text-slate-400">Apply by: {drive.deadline}</span>
-                  <button 
-                    onClick={() => navigate('/login')}
-                    className="text-gov-blue font-bold hover:underline"
-                  >
-                    Apply Now
-                  </button>
+                  <div className="border-t border-slate-200 mt-4 pt-3 flex items-center justify-between text-xs">
+                    <span className="text-slate-400">Apply by: {drive.deadline}</span>
+                    <button 
+                      onClick={() => navigate('/login')}
+                      className="text-gov-blue font-bold hover:underline"
+                    >
+                      Apply Now
+                    </button>
+                  </div>
                 </div>
+              ))
+            ) : (
+              <div className="col-span-full border border-slate-200 rounded-lg p-8 bg-slate-50 text-center space-y-3">
+                <div className="mx-auto w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
+                  <Briefcase size={20} />
+                </div>
+                <h4 className="text-sm font-bold text-slate-700 uppercase">No Active Public Recruitment Drives</h4>
+                <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                  Official recruitment schedules will appear here once announced by the central placement cell. Registered students and faculty can sign in to view departmental calendars and eligible drives.
+                </p>
+                <button
+                  onClick={() => loadDrives()}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-gov-blue hover:underline"
+                >
+                  <RefreshCw size={12} className={loadingDrives ? "animate-spin" : ""} /> Refresh Drives
+                </button>
               </div>
-            ))}
+            )}
           </div>
         </div>
       </section>

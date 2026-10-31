@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { GraduationCap, Eye, EyeOff, Lock, Mail, AlertCircle } from 'lucide-react';
+import { prewarmBackend } from '../services/api';
+import { GraduationCap, Eye, EyeOff, Lock, Mail, AlertCircle, RefreshCw } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const { login, user, loading } = useAuth();
@@ -15,14 +16,34 @@ export const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [connectingNotice, setConnectingNotice] = useState<string | null>(null);
+
+  // Proactive background pre-warm on page mount
+  useEffect(() => {
+    prewarmBackend();
+  }, []);
+
+  // Listen for backend connection events during login submission
+  useEffect(() => {
+    const handleConnecting = (e: any) => {
+      if (isSubmitting) {
+        const attempt = e.detail?.attempt || 1;
+        const max = e.detail?.maxAttempts || 3;
+        setConnectingNotice(`Connecting to placement services (Attempt ${attempt} of ${max})...`);
+      }
+    };
+    window.addEventListener('backend-connecting', handleConnecting);
+    return () => window.removeEventListener('backend-connecting', handleConnecting);
+  }, [isSubmitting]);
 
   const handleTabChange = (role: 'student' | 'faculty' | 'admin') => {
     setActiveTab(role);
     setError(null);
+    setConnectingNotice(null);
   };
 
   // Redirect if already authenticated
-  React.useEffect(() => {
+  useEffect(() => {
     if (!loading && user) {
       if (user.role === 'admin') {
         navigate('/admin');
@@ -36,8 +57,13 @@ export const Login: React.FC = () => {
     }
   }, [user, loading, navigate]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: React.FormEvent) => {
+    if (e) {
+      e.preventDefault();
+    }
+    if (isSubmitting) {
+      return; // Prevent duplicate concurrent submissions
+    }
     if (!email || !password) {
       setError('Please fill in all credentials.');
       return;
@@ -45,6 +71,7 @@ export const Login: React.FC = () => {
 
     setIsSubmitting(true);
     setError(null);
+    setConnectingNotice(null);
 
     try {
       const userProfile = await login({ email, password, remember_me: rememberMe });
@@ -70,11 +97,12 @@ export const Login: React.FC = () => {
         navigate('/student');
       }
     } catch (err: any) {
+      setConnectingNotice(null);
+      // Strictly preserve email, password, activeTab during connection failures
       if (!err.response) {
-        setError(
-          'Unable to reach backend service. The cloud server may be waking up from standby (Render Free tier). ' +
-          'Please wait up to 30–45 seconds and try again.'
-        );
+        setError('Unable to reach the placement service. The server is initializing. Please click Retry to connect.');
+      } else if ([502, 503, 504].includes(err.response?.status)) {
+        setError('The placement service is initializing. Please click Retry in a few seconds.');
       } else {
         setError(
           err.response?.data?.detail || 
@@ -83,6 +111,7 @@ export const Login: React.FC = () => {
       }
     } finally {
       setIsSubmitting(false);
+      setConnectingNotice(null);
     }
   };
 
@@ -154,10 +183,29 @@ export const Login: React.FC = () => {
 
           {/* Form */}
           <form id="login-form-panel" role="tabpanel" aria-labelledby={`role-tab-${activeTab}`} className="space-y-5" onSubmit={handleSubmit}>
+            {connectingNotice && (
+              <div role="status" className="bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 rounded p-3 text-xs text-sky-800 dark:text-sky-300 flex items-center gap-2.5 animate-fadeIn">
+                <RefreshCw size={14} className="animate-spin text-sky-600 dark:text-sky-400 shrink-0" aria-hidden="true" />
+                <span className="font-medium">{connectingNotice}</span>
+              </div>
+            )}
+
             {error && (
-              <div role="alert" className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 rounded p-3 text-xs text-red-700 dark:text-red-400 flex items-start gap-2 animate-fadeIn">
-                <AlertCircle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
-                <span>{error}</span>
+              <div role="alert" className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 rounded p-3 text-xs text-red-700 dark:text-red-400 flex flex-col gap-2 animate-fadeIn">
+                <div className="flex items-start gap-2">
+                  <AlertCircle size={14} className="shrink-0 mt-0.5" aria-hidden="true" />
+                  <span>{error}</span>
+                </div>
+                {(error.includes('initializing') || error.includes('Unable to reach')) && (
+                  <button
+                    type="button"
+                    onClick={() => handleSubmit()}
+                    disabled={isSubmitting}
+                    className="self-start text-[11px] font-bold text-gov-blue dark:text-sky-400 hover:underline flex items-center gap-1 mt-1 disabled:opacity-50"
+                  >
+                    <RefreshCw size={11} className={isSubmitting ? "animate-spin" : ""} /> Retry Connection
+                  </button>
+                )}
               </div>
             )}
 
@@ -241,7 +289,7 @@ export const Login: React.FC = () => {
                 disabled={isSubmitting}
                 className="w-full bg-gov-navy hover:bg-gov-accent text-white py-2.5 rounded font-bold uppercase tracking-wider text-sm transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gov-blue shadow disabled:opacity-50"
               >
-                {isSubmitting ? 'Verifying Account...' : 'Sign In to Workspace'}
+                {isSubmitting ? (connectingNotice ? 'Connecting to Portal...' : 'Verifying Account...') : 'Sign In to Workspace'}
               </button>
             </div>
           </form>

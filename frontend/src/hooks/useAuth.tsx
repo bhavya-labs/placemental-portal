@@ -21,9 +21,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const initAuth = async () => {
       const storedToken = localStorage.getItem('token');
+      const cachedUser = localStorage.getItem('user');
+
       if (storedToken) {
+        setToken(storedToken);
+        if (cachedUser) {
+          try {
+            setUser(JSON.parse(cachedUser));
+          } catch {
+            // Ignore corrupted cached JSON
+          }
+        }
+
         try {
-          setToken(storedToken);
           const profile = await authService.getProfile();
           setUser(profile);
           localStorage.setItem('user', JSON.stringify(profile));
@@ -32,15 +42,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const isAuthError = error.response && (error.response.status === 401 || error.response.status === 403);
           if (isAuthError) {
             logout();
-          } else {
-            const cachedUser = localStorage.getItem('user');
-            if (cachedUser) {
-              try {
-                setUser(JSON.parse(cachedUser));
-              } catch {
-                // Ignore
-              }
-            }
           }
         }
       }

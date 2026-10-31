@@ -21,8 +21,39 @@ const API_BASE_URL = resolveApiBaseUrl();
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 60000, // 60s timeout to allow Render container to wake up from cold standby
+  timeout: 60000, // 60s timeout to allow Render container to wake up
 });
+
+// ---------------------------------------------------------------------------
+// Silent Background Backend Pre-Warming
+// ---------------------------------------------------------------------------
+let prewarmPromise: Promise<boolean> | null = null;
+
+export const prewarmBackend = (): Promise<boolean> => {
+  if (prewarmPromise) {
+    return prewarmPromise;
+  }
+  if (typeof window === 'undefined') {
+    return Promise.resolve(false);
+  }
+
+  prewarmPromise = (async () => {
+    try {
+      // Non-blocking 15s health check to trigger cold start at reverse proxy
+      await api.get('/api/health', {
+        timeout: 15000,
+        // @ts-ignore custom config flag
+        __skipRetry: true,
+      });
+      return true;
+    } catch {
+      // Regardless of success, the ping reached Render's proxy and initiated container boot
+      return false;
+    }
+  })();
+
+  return prewarmPromise;
+};
 
 // Auto-inject JWT token to all requests if present in localStorage
 api.interceptors.request.use(
@@ -38,62 +69,116 @@ api.interceptors.request.use(
   }
 );
 
-// Response interceptor to handle session timeouts/unauthorized access and format technical errors
+// Format errors professionally without disclosing internal infrastructure
+const formatProfessionalError = (error: any) => {
+  if (error.response) {
+    const status = error.response.status;
+    if (status === 401) {
+      const storedToken = localStorage.getItem('token');
+      const storedUser = localStorage.getItem('user');
+      let userRole = '';
+      if (storedUser) {
+        try {
+          const parsed = JSON.parse(storedUser);
+          userRole = parsed.role || '';
+        } catch {
+          // ignore JSON parse error
+        }
+      }
+
+      if (storedToken) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        const basePath = (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL)
+          ? import.meta.env.BASE_URL.replace(/\/$/, '')
+          : '';
+        const loginTarget = `${basePath}${userRole === 'parent' ? '/parent/login' : '/login'}`;
+        if (typeof window !== 'undefined' && window.location.pathname !== loginTarget) {
+          window.location.href = loginTarget;
+        }
+      }
+
+      if (error.response.data) {
+        const detail = error.response.data.detail;
+        if (detail === "Token has expired" || detail === "Signature has expired" || String(detail).toLowerCase().includes("jwt")) {
+          error.response.data.detail = "Your session has expired. Please sign in again.";
+        }
+      }
+    } else if (status === 403) {
+      const oldDetail = error.response.data?.detail || "";
+      if (!oldDetail.includes("locked") && !oldDetail.includes("correction")) {
+        error.response.data = error.response.data || {};
+        error.response.data.detail = "You do not have permission to access this information.";
+      }
+    } else if (status === 422) {
+      error.response.data = error.response.data || {};
+      error.response.data.detail = "The information entered could not be processed. Please check the details.";
+    } else if ([502, 503, 504].includes(status)) {
+      error.response.data = error.response.data || {};
+      error.response.data.detail = "The placement service is initializing. Please try again in a few moments.";
+    } else if (status >= 500) {
+      error.response.data = error.response.data || {};
+      error.response.data.detail = "Something went wrong while processing your request. Please try again.";
+    }
+  } else {
+    error.message = "Unable to connect to the placement service. The server may be starting up. Please try again.";
+  }
+  return error;
+};
+
+// Response interceptor with controlled retries for safe, idempotent requests
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response) {
-      const status = error.response.status;
-      if (status === 401) {
-        const storedToken = localStorage.getItem('token');
-        const storedUser = localStorage.getItem('user');
-        let userRole = '';
-        if (storedUser) {
-          try {
-            const parsed = JSON.parse(storedUser);
-            userRole = parsed.role || '';
-          } catch {
-            // ignore JSON parse error
-          }
-        }
-
-        // Only redirect if the user had an active stored token in localStorage
-        // Prevents unauthenticated background calls on public landing pages from triggering redirect loops
-        if (storedToken) {
-          localStorage.removeItem('token');
-          localStorage.removeItem('user');
-          const basePath = (typeof import.meta !== 'undefined' && import.meta.env?.BASE_URL)
-            ? import.meta.env.BASE_URL.replace(/\/$/, '')
-            : '';
-          const loginTarget = `${basePath}${userRole === 'parent' ? '/parent/login' : '/login'}`;
-          if (window.location.pathname !== loginTarget) {
-            window.location.href = loginTarget;
-          }
-        }
-
-        if (error.response.data) {
-          const detail = error.response.data.detail;
-          if (detail === "Token has expired" || detail === "Signature has expired" || String(detail).toLowerCase().includes("jwt")) {
-            error.response.data.detail = "Your session has expired. Please sign in again.";
-          }
-        }
-      } else if (status === 403) {
-        const oldDetail = error.response.data?.detail || "";
-        if (!oldDetail.includes("locked") && !oldDetail.includes("correction")) {
-          error.response.data = error.response.data || {};
-          error.response.data.detail = "You do not have permission to access this information.";
-        }
-      } else if (status === 422) {
-        error.response.data = error.response.data || {};
-        error.response.data.detail = "The information entered could not be processed. Please check the details.";
-      } else if (status >= 500) {
-        error.response.data = error.response.data || {};
-        error.response.data.detail = "Something went wrong while processing your request. Please try again.";
-      }
-    } else {
-      error.message = "Something went wrong while processing your request. Please try again.";
+  async (error) => {
+    const config = error.config;
+    if (!config) {
+      return Promise.reject(formatProfessionalError(error));
     }
-    return Promise.reject(error);
+
+    // Identify cold-start signatures: no response, gateway errors, or connection timeout
+    const isColdStartCandidate = 
+      !error.response || 
+      [502, 503, 504].includes(error.response.status) || 
+      error.code === 'ECONNABORTED';
+
+    // Strict Safeguards:
+    // 1. NEVER automatically retry Parent OTP requests (prevents rate limiting and multiple OTPs)
+    // 2. NEVER automatically retry if __skipRetry is set
+    const url = config.url || '';
+    const isOtpRequest = url.includes('/api/parent/');
+    const skipRetry = Boolean(config.__skipRetry);
+
+    if (isOtpRequest || skipRetry) {
+      return Promise.reject(formatProfessionalError(error));
+    }
+
+    // Safe, idempotent methods eligible for retry: GET, HEAD, OPTIONS
+    const method = (config.method || 'get').toLowerCase();
+    const isSafeMethod = ['get', 'head', 'options'].includes(method);
+
+    // Bounded retries: up to 3 attempts with exponential backoff (1.5s, 3s, 6s)
+    const maxRetries = isSafeMethod ? 3 : 0;
+    config.__retryCount = config.__retryCount || 0;
+
+    if (isColdStartCandidate && config.__retryCount < maxRetries) {
+      config.__retryCount += 1;
+      const delay = Math.min(1500 * Math.pow(2, config.__retryCount - 1), 6000);
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('backend-connecting', {
+          detail: {
+            attempt: config.__retryCount,
+            maxAttempts: maxRetries,
+            url: config.url
+          }
+        }));
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      return api(config);
+    }
+
+    return Promise.reject(formatProfessionalError(error));
   }
 );
 

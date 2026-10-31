@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { parentService } from '../services/api';
-import { GraduationCap, Mail, Phone, Lock, AlertCircle, Info, ArrowLeft } from 'lucide-react';
+import { parentService, prewarmBackend } from '../services/api';
+import { GraduationCap, Mail, Phone, Lock, AlertCircle, Info, ArrowLeft, RefreshCw } from 'lucide-react';
 
 export const ParentLogin: React.FC = () => {
   const { login } = useAuth();
@@ -17,8 +17,16 @@ export const ParentLogin: React.FC = () => {
   const [info, setInfo] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Silent background pre-warm on page mount
+  useEffect(() => {
+    prewarmBackend();
+  }, []);
+
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) {
+      return; // Prevent duplicate requests
+    }
     if (!rollNumber || !mobileNumber) {
       setError('Please fill in child roll number and parent mobile number.');
       return;
@@ -29,12 +37,12 @@ export const ParentLogin: React.FC = () => {
     setInfo(null);
 
     try {
-      await parentService.requestOtp(parseInt(rollNumber), mobileNumber);
+      const res = await parentService.requestOtp(parseInt(rollNumber), mobileNumber);
       setStep('verify');
-      setInfo('OTP code sent successfully to registered mobile number.');
+      setInfo(res?.message || 'OTP verification code generated. (Note: SMS delivery requires an active institutional SMS gateway. Contact the placement office if you do not receive an SMS).');
     } catch (err: any) {
       if (!err.response) {
-        setError('Unable to reach backend service. The cloud server may be waking up from standby (Render Free tier). Please retry in 30 seconds.');
+        setError('Unable to reach the placement service. The server may be initializing. Please wait a few moments and try again.');
       } else {
         setError(err.response?.data?.detail || 'Failed to request OTP. Make sure the roll number and mobile match registered files.');
       }
@@ -45,6 +53,9 @@ export const ParentLogin: React.FC = () => {
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) {
+      return; // Prevent duplicate requests
+    }
     if (!otp) {
       setError('Please enter the OTP verification code.');
       return;
@@ -75,7 +86,7 @@ export const ParentLogin: React.FC = () => {
     } catch (err: any) {
       setIsSubmitting(false);
       if (!err.response) {
-        setError('Unable to reach backend service. The server may be waking up from standby. Please retry in 30 seconds.');
+        setError('Unable to reach the placement service. The server may be initializing. Please wait a few moments and try again.');
       } else {
         setError(err.response?.data?.detail || 'Incorrect OTP code. Please try again.');
       }
@@ -109,6 +120,13 @@ export const ParentLogin: React.FC = () => {
             <ArrowLeft size={14} />
             <span>Back to Staff / Student Login</span>
           </button>
+
+          <div className="bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded p-3 text-[11px] text-slate-650 dark:text-slate-300 flex items-start gap-2 mb-4 leading-relaxed">
+            <Info size={15} className="text-gov-blue dark:text-sky-400 shrink-0 mt-0.5" />
+            <span>
+              <strong>Notice:</strong> Automated telecom SMS delivery requires a production SMS gateway integration. In this environment, OTP verification is simulated. Contact the placement coordinator if you require access assistance.
+            </span>
+          </div>
 
           {error && (
             <div role="alert" className="bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 rounded p-3 text-xs text-red-700 dark:text-red-400 flex items-start gap-2 mb-4 animate-fadeIn">
@@ -172,7 +190,7 @@ export const ParentLogin: React.FC = () => {
                 disabled={isSubmitting}
                 className="w-full bg-gov-navy hover:bg-gov-accent text-white py-2.5 rounded font-bold uppercase tracking-wider text-sm transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gov-blue shadow disabled:opacity-50"
               >
-                {isSubmitting ? 'Verifying Student Details...' : 'Request OTP Code'}
+                {isSubmitting ? 'Connecting...' : 'Request OTP Code'}
               </button>
             </form>
           ) : (
@@ -211,9 +229,10 @@ export const ParentLogin: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full bg-gov-blue hover:bg-gov-accent text-white py-2.5 rounded font-bold uppercase tracking-wider text-sm transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gov-blue shadow"
+                disabled={isSubmitting}
+                className="w-full bg-gov-blue hover:bg-gov-accent text-white py-2.5 rounded font-bold uppercase tracking-wider text-sm transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gov-blue shadow disabled:opacity-50"
               >
-                Verify & Login
+                {isSubmitting ? 'Verifying Code...' : 'Verify & Login'}
               </button>
             </form>
           )}
