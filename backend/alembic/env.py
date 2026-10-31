@@ -21,10 +21,12 @@ from backend.app.models import (
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
+import os
 config = context.config
 
-# Dynamically set sqlalchemy.url from project settings
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Dynamically set sqlalchemy.url from environment, explicit config, or project settings
+dynamic_url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url") or settings.DATABASE_URL
+config.set_main_option("sqlalchemy.url", dynamic_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

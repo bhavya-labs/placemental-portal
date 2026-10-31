@@ -31,60 +31,9 @@ from backend.app.routers import (
 import uvicorn
 
 
-# ============================================================
-# DATABASE MIGRATIONS
-# ============================================================
+# Note: Database migrations are executed strictly during build / deployment release commands
+# (e.g. build.sh or explicit deployment workflow), NOT on application module import or startup.
 
-def run_alembic_migrations():
-    """
-    Run Alembic migrations to bring the database schema
-    up to the latest revision.
-    """
-    from pathlib import Path
-    from alembic.config import Config
-    from alembic import command
-
-    # backend/app/main.py
-    #         ↑
-    # parents:
-    # app -> backend -> project root
-    base_dir = Path(__file__).resolve().parent.parent.parent
-
-    ini_path = base_dir / "alembic.ini"
-
-    # Fallback location
-    if not ini_path.exists():
-        ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
-
-    if not ini_path.exists():
-        print("Alembic configuration file not found. Skipping migrations.")
-        return
-
-    try:
-        alembic_cfg = Config(str(ini_path))
-        command.upgrade(alembic_cfg, "head")
-        print("Alembic migrations completed successfully.")
-
-    except Exception as e:
-        # Do not prevent the application from starting if migrations
-        # have already been applied or if the database has a recoverable
-        # migration issue.
-        print(f"Alembic migration info: {e}")
-
-
-# Run migrations before application initialization.
-run_alembic_migrations()
-
-
-# ============================================================
-# DATABASE TABLE INITIALIZATION
-# ============================================================
-
-try:
-    Base.metadata.create_all(bind=engine)
-    print("Database tables verified successfully.")
-except Exception as e:
-    print(f"Database table initialization warning: {e}")
 
 
 # ============================================================
@@ -167,6 +116,8 @@ def startup_event():
     training should instead be performed separately through a dedicated
     command/job when required.
     """
+    # 1. Enforce cryptographic secret validation in production environments
+    settings.validate_production_secrets()
 
     db = SessionLocal()
 
