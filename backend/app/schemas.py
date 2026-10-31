@@ -137,6 +137,10 @@ class StudentResponse(StudentBase):
     resume_analysis_json: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
+class StudentVerificationRequest(BaseModel):
+    verification_status: str = "VERIFIED"
+    remarks: Optional[str] = None
+
 # Faculty Details
 class FacultyBase(BaseModel):
     designation: str
@@ -280,6 +284,7 @@ class NotificationResponse(BaseModel):
     id: int
     title: str
     message: str
+    reference_key: Optional[str] = None
     is_read: bool
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)

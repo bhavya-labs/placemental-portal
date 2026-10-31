@@ -7,6 +7,10 @@ from datetime import date, timedelta
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
+# STRICT TEST ISOLATION: Configure isolated test database before importing backend modules
+TEST_DB_PATH = project_root / "test_placement_portal.db"
+os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH.as_posix()}"
+
 import pytest
 from fastapi.testclient import TestClient
 from backend.app.main import app
@@ -304,6 +308,14 @@ def setup_test_fixtures():
         seed_minimal_test_fixtures(db)
     finally:
         db.close()
+    yield
+    # Dispose connection pool and clean up isolated test database
+    engine.dispose()
+    if TEST_DB_PATH.exists():
+        try:
+            TEST_DB_PATH.unlink()
+        except Exception:
+            pass
 
 @pytest.fixture(scope="session")
 def client():

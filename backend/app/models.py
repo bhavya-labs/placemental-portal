@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Date, Text
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, DateTime, Date, Text, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from backend.app.database import Base
@@ -215,11 +215,22 @@ class Feedback(Base):
 
 class Notification(Base):
     __tablename__ = "notifications"
+    __table_args__ = (
+        Index(
+            "uq_notif_user_ref",
+            "user_id",
+            "reference_key",
+            unique=True,
+            sqlite_where=Column("reference_key").isnot(None),
+            postgresql_where=Column("reference_key").isnot(None)
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String, nullable=False)
     message = Column(Text, nullable=False)
+    reference_key = Column(String, nullable=True, index=True)
     is_read = Column(Boolean, default=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 

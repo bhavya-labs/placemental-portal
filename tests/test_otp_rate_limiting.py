@@ -8,9 +8,14 @@ def test_otp_request_and_cooldown(client, db_session, student_user_and_token):
     student_id = student_user.id
     phone = "9876500001"
 
-    # Reset any existing Parent / ParentOTP for isolation
+    # Reset any existing ParentOTP and ensure pre-registered authorized parent exists
     db_session.query(ParentOTP).filter(ParentOTP.mobile_number == phone).delete()
-    db_session.query(Parent).filter(Parent.student_id == student_id).delete()
+    parent = db_session.query(Parent).filter(Parent.student_id == student_id).first()
+    if not parent:
+        parent = Parent(student_id=student_id, parent_name="Authorized Guardian", mobile_number=phone, relationship="Guardian")
+        db_session.add(parent)
+    else:
+        parent.mobile_number = phone
     db_session.commit()
 
     # 1. First OTP request succeeds

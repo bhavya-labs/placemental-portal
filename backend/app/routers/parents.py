@@ -6,7 +6,7 @@ from jose import JWTError, jwt
 from backend.app.database import get_db
 from backend.app.models import User, Student, Parent, ParentOTP, PlacementDrive, Application, ActivityAttendance, PlacementActivity, Notification
 from backend.app.schemas import ParentOTPRequest, ParentOTPVerify
-from backend.app.auth import create_access_token, get_password_hash, verify_password
+from backend.app.auth import create_access_token, get_password_hash, verify_password, get_current_user
 from backend.app.config import settings
 
 router = APIRouter(prefix="/api/parent", tags=["Parent Portal"])
@@ -54,23 +54,16 @@ sms_provider = ProductionSMSProvider() if settings.SMS_ENV == "prod" else Develo
 
 @router.post("/request-otp")
 def request_parent_otp(req: ParentOTPRequest, db: Session = Depends(get_db)):
+    # Strict Security: Validate pre-registered parent contact records
+    # Reject unauthorized phone number association and prevent student roll number enumeration
     student = db.query(Student).filter(Student.id == req.roll_number).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Student roll number not registered")
+    parent = db.query(Parent).filter(Parent.student_id == req.roll_number).first() if student else None
 
-    parent = db.query(Parent).filter(Parent.student_id == req.roll_number).first()
-    if not parent:
-        parent = Parent(
-            student_id=req.roll_number,
-            parent_name=f"Parent of {student.user.name}",
-            mobile_number=req.mobile_number,
-            relationship="Guardian"
+    if not student or not parent or parent.mobile_number != req.mobile_number:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid student roll number or unregistered parent mobile number. Please contact the college placement coordinator to register your parent contact details."
         )
-        db.add(parent)
-        db.commit()
-    else:
-        if parent.mobile_number != req.mobile_number:
-            raise HTTPException(status_code=400, detail="Mobile number does not match registered records")
 
     # Cooldown & Rate limiting check
     now = datetime.utcnow()
@@ -240,3 +233,69 @@ def get_child_data(student_id: int = Depends(get_current_parent_child_id), db: S
         "attendance": attendance_data,
         "notifications": notif_data
     }
+
+
+@router.post("/register")
+def register_parent_contact(
+    student_id: int,
+    parent_name: str,
+    mobile_number: str,
+    relationship: str = "Guardian",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Authorized parent registration endpoint.
+    Accessible only by Admin, Faculty coordinators, or the authenticated student themselves.
+    """
+    if current_user.role not in ["admin", "faculty", "hod", "tpo", "student"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Unauthorized role to register parent contacts"
+        )
+
+    if current_user.role == "student" and current_user.id != student_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Students can only register parent contacts for their own profile"
+        )
+
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student profile not found")
+
+    # Enforce departmental restriction for faculty and HOD coordinators
+    if current_user.role in ["faculty", "hod"]:
+        faculty_profile = current_user.faculty_profile
+        if not faculty_profile or not faculty_profile.dept_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Faculty coordinator has no assigned department"
+            )
+        if student.dept_id != faculty_profile.dept_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Faculty/HOD coordinators can only register parent contacts for students in their assigned department"
+            )
+
+    parent = db.query(Parent).filter(Parent.student_id == student_id).first()
+    if parent:
+        parent.parent_name = parent_name
+        parent.mobile_number = mobile_number
+        parent.relationship = relationship
+    else:
+        parent = Parent(
+            student_id=student_id,
+            parent_name=parent_name,
+            mobile_number=mobile_number,
+            relationship=relationship
+        )
+        db.add(parent)
+    db.commit()
+    return {
+        "message": "Parent contact registered successfully",
+        "student_id": student_id,
+        "parent_name": parent_name,
+        "relationship": relationship
+    }
+

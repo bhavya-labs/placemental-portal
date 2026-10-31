@@ -31,9 +31,14 @@ def test_parent_otp_does_not_disclose_otp_in_response(client, db_session, studen
     student_user, _ = student_user_and_token
     phone = "9876543210"
 
-    # Reset any existing Parent / ParentOTP for test isolation
+    # Reset any existing ParentOTP and ensure pre-registered parent exists
     db_session.query(ParentOTP).filter(ParentOTP.mobile_number == phone).delete()
-    db_session.query(Parent).filter(Parent.student_id == student_user.id).delete()
+    parent = db_session.query(Parent).filter(Parent.student_id == student_user.id).first()
+    if not parent:
+        parent = Parent(student_id=student_user.id, parent_name="Authorized Parent", mobile_number=phone, relationship="Guardian")
+        db_session.add(parent)
+    else:
+        parent.mobile_number = phone
     db_session.commit()
 
     resp = client.post("/api/parent/request-otp", json={

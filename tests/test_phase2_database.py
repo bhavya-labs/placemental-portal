@@ -20,7 +20,7 @@ def test_alembic_revision():
     row = cur.fetchone()
     print(f"Current Alembic revision in DB: {row[0] if row else 'None'}")
     assert row is not None, "Alembic version table is empty!"
-    assert row[0] in ["6e105b4276ae", "ac9fcc9ba19f"], f"Expected head revision 6e105b4276ae or ac9fcc9ba19f, got {row[0]}"
+    assert row[0] in ["6e105b4276ae", "ac9fcc9ba19f", "b7e21c8340d1", "c8f39a4d12e5"], f"Expected head revision 6e105b4276ae, ac9fcc9ba19f, b7e21c8340d1 or c8f39a4d12e5, got {row[0]}"
     print(f"PASS: Alembic head revision is confirmed ({row[0]}).")
 
 def test_database_indexes():

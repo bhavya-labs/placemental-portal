@@ -93,6 +93,63 @@ def check_student_drive_eligibility(student_profile: Student, drive: PlacementDr
     is_attendance_ok = student_profile.attendance >= (drive.min_attendance or 0.0)
     return is_dept_ok and is_batch_ok and is_cgpa_ok and is_backlogs_ok and is_attendance_ok
 
+def broadcast_drive_notification(
+    db: Session,
+    drive: PlacementDrive,
+    title: str,
+    message: str,
+    ref_key: str
+) -> int:
+    """
+    Safely broadcast notifications for a placement drive event.
+    - Sends notifications ONLY to eligible students via check_student_drive_eligibility.
+    - Enforces idempotency via reference_key to prevent duplicate broadcasts.
+    - Preserves existing notifications and handles database transactions safely.
+    - Returns count of newly inserted notifications.
+    """
+    from backend.app.models import Notification, Student
+
+    # 1. Identify already-notified users for this specific reference_key
+    already_notified = {
+        r[0] for r in db.query(Notification.user_id)
+        .filter(Notification.reference_key == ref_key)
+        .all()
+    }
+
+    # If no reference_key records exist (legacy records), check by exact (title, message)
+    if not already_notified:
+        already_notified = {
+            r[0] for r in db.query(Notification.user_id)
+            .filter(Notification.title == title, Notification.message == message)
+            .all()
+        }
+
+    # 2. Query students and filter for eligibility
+    all_students = db.query(Student).all()
+    newly_notified = 0
+    for s in all_students:
+        if s.id not in already_notified and check_student_drive_eligibility(s, drive):
+            try:
+                # Use nested transaction savepoint to safely handle concurrent duplicate attempts
+                with db.begin_nested():
+                    notif = Notification(
+                        user_id=s.id,
+                        title=title,
+                        message=message,
+                        reference_key=ref_key
+                    )
+                    db.add(notif)
+                    db.flush()
+                newly_notified += 1
+            except Exception:
+                # Uniqueness conflict under concurrent request - rolled back to savepoint
+                continue
+
+    if newly_notified > 0:
+        db.commit()
+
+    return newly_notified
+
 @router.get("/api/drives")
 def get_drives(
     status_filter: Optional[str] = None,
@@ -195,18 +252,13 @@ def create_drive(drive_data: PlacementDriveCreate, current_user: User = Depends(
     db.add(log)
     db.commit()
 
-    # Trigger published notifications (Req 12)
+    # Trigger published notifications idempotently to eligible students
     if drive.status == "PUBLISHED":
-        from backend.app.models import Notification
-        students = db.query(Student).all()
-        for s in students:
-            notif = Notification(
-                user_id=s.id,
-                title="New Placement Drive Published",
-                message=f"{drive.company.name} is hiring for the role '{drive.role}'. Package: {drive.package_lpa} LPA. Apply before {drive.deadline.strftime('%Y-%m-%d')}."
-            )
-            db.add(notif)
-        db.commit()
+        company_name = drive.company.name if drive.company else "A company"
+        deadline_str = drive.deadline.strftime('%Y-%m-%d') if drive.deadline else "the deadline"
+        msg = f"{company_name} is hiring for the role '{drive.role}'. Package: {drive.package_lpa} LPA. Apply before {deadline_str}."
+        ref_key = f"drive:{drive.id}:published"
+        broadcast_drive_notification(db, drive, "New Placement Drive Published", msg, ref_key)
 
     return {
         "id": drive.id,
@@ -474,32 +526,23 @@ def update_drive(
         db.add(log)
         db.commit()
 
-        # Trigger notifications (Req 12)
-        from backend.app.models import Notification
+        # Trigger published notifications idempotently (Req 12)
         if old_status != "PUBLISHED" and new_status == "PUBLISHED":
-            students = db.query(Student).all()
-            for s in students:
-                notif = Notification(
-                    user_id=s.id,
-                    title="New Placement Drive Published",
-                    message=f"{drive.company.name} is hiring for the role '{drive.role}'. Package: {drive.package_lpa} LPA. Apply before {drive.deadline.strftime('%Y-%m-%d')}."
-                )
-                db.add(notif)
-            db.commit()
+            company_name = drive.company.name if drive.company else "A company"
+            deadline_str = drive.deadline.strftime('%Y-%m-%d') if drive.deadline else "the deadline"
+            msg = f"{company_name} is hiring for the role '{drive.role}'. Package: {drive.package_lpa} LPA. Apply before {deadline_str}."
+            ref_key = f"drive:{drive.id}:published"
+            broadcast_drive_notification(db, drive, "New Placement Drive Published", msg, ref_key)
 
         # Check if criteria fields changed
-        criteria_fields = ["cgpa_cutoff", "allowed_backlogs", "min_attendance", "batch"]
+        criteria_fields = ["cgpa_cutoff", "allowed_backlogs", "min_attendance", "batch", "allowed_depts"]
         has_criteria_change = any(any(field in c for field in criteria_fields) for c in changes)
-        if has_criteria_change:
-            students = db.query(Student).all()
-            for s in students:
-                notif = Notification(
-                    user_id=s.id,
-                    title="Eligibility Criteria Updated",
-                    message=f"The eligibility criteria for the placement drive of {drive.company.name} ({drive.role}) has been updated. Please verify your eligibility status."
-                )
-                db.add(notif)
-            db.commit()
+        if has_criteria_change and drive.status == "PUBLISHED":
+            criteria_sig = f"{drive.cgpa_cutoff}:{drive.allowed_backlogs}:{drive.min_attendance}:{drive.batch}:{drive.allowed_depts}"
+            ref_key = f"drive:{drive.id}:criteria:{criteria_sig}"
+            company_name = drive.company.name if drive.company else "Company"
+            msg = f"The eligibility criteria for the placement drive of {company_name} ({drive.role}) has been updated. Please verify your eligibility status."
+            broadcast_drive_notification(db, drive, "Eligibility Criteria Updated", msg, ref_key)
 
     db.refresh(drive)
     return {
@@ -542,10 +585,67 @@ def delete_drive(
     drive = db.query(PlacementDrive).filter(PlacementDrive.id == drive_id).first()
     if not drive:
         raise HTTPException(status_code=404, detail="Placement drive not found")
-        
+
+    from backend.app.models import Application, PlacementActivity
+    app_count = db.query(Application).filter(Application.drive_id == drive_id).count()
+    activity_count = db.query(PlacementActivity).filter(PlacementActivity.placement_drive_id == drive_id).count()
+
+    # Prevent accidental hard-deletion if applications or activities exist: archive instead
+    if app_count > 0 or activity_count > 0:
+        drive.status = "ARCHIVED"
+        log = SystemLog(
+            user_email=current_user.email,
+            action="ARCHIVE_PLACEMENT_DRIVE",
+            details=f"Placement drive ID {drive.id} ({drive.role}) has {app_count} application(s). Safely ARCHIVED to preserve historical records."
+        )
+        db.add(log)
+        db.commit()
+        return {
+            "message": f"Placement drive has {app_count} existing application(s). It has been safely ARCHIVED instead of deleted to protect historical records.",
+            "status": "ARCHIVED",
+            "applications_preserved": app_count,
+            "archived": True
+        }
+
+    log = SystemLog(
+        user_email=current_user.email,
+        action="DELETE_PLACEMENT_DRIVE",
+        details=f"Deleted placement drive ID {drive.id} ({drive.role}) with 0 applications."
+    )
+    db.add(log)
     db.delete(drive)
     db.commit()
-    return {"message": "Placement drive deleted successfully"}
+    return {"message": "Placement drive deleted successfully", "archived": False}
+
+
+@router.put("/api/drives/{drive_id}/archive")
+def archive_drive(
+    drive_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    verify_permission(current_user, "Placement Drives", "EDIT", db)
+    drive = db.query(PlacementDrive).filter(PlacementDrive.id == drive_id).first()
+    if not drive:
+        raise HTTPException(status_code=404, detail="Placement drive not found")
+    
+    from backend.app.models import Application
+    app_count = db.query(Application).filter(Application.drive_id == drive_id).count()
+    drive.status = "ARCHIVED"
+    log = SystemLog(
+        user_email=current_user.email,
+        action="ARCHIVE_PLACEMENT_DRIVE",
+        details=f"Archived placement drive ID {drive.id} ({drive.role}) with {app_count} application(s)."
+    )
+    db.add(log)
+    db.commit()
+    return {
+        "message": f"Placement drive archived successfully. New applications are disabled, and all {app_count} historical records remain preserved.",
+        "id": drive.id,
+        "status": "ARCHIVED",
+        "applications_count": app_count
+    }
+
 
 @router.delete("/api/companies/{company_id}")
 def delete_company(
@@ -558,6 +658,17 @@ def delete_company(
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
+
+    from backend.app.models import Application, PlacementDrive
+    # Verify no active or archived drives for this company have dependent applications
+    drives = db.query(PlacementDrive).filter(PlacementDrive.company_id == company_id).all()
+    drive_ids = [d.id for d in drives]
+    total_apps = db.query(Application).filter(Application.drive_id.in_(drive_ids)).count() if drive_ids else 0
+    if total_apps > 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot delete company '{company.name}': {total_apps} application(s) exist across its placement drives. Please archive the placement drives instead."
+        )
         
     db.delete(company)
     db.commit()

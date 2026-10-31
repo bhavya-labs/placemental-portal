@@ -53,7 +53,8 @@ def get_dashboard_analytics(
 
     # If no students, return empty structure
     if not students:
-        total_drives_count = db.query(PlacementDrive).count()
+        active_statuses = ["PUBLISHED", "REGISTRATION_OPEN", "Active"]
+        active_drives_count = db.query(PlacementDrive).filter(PlacementDrive.status.in_(active_statuses)).count()
         return {
             "total_students": 0,
             "placed_students": 0,
@@ -62,7 +63,7 @@ def get_dashboard_analytics(
             "average_package": 0.0,
             "median_package": 0.0,
             "at_risk_count": 0,
-            "active_drives_count": total_drives_count,
+            "active_drives_count": active_drives_count,
             "gender_stats": [],
             "branch_hiring": [],
             "company_hiring": [],
@@ -210,8 +211,9 @@ def get_dashboard_analytics(
 
     skill_demand = [{"skill": k, "demand": v} for k, v in sorted(skill_freq.items(), key=lambda x: x[1], reverse=True)[:10]]
 
-    # Total drives counter
-    total_drives_count = db.query(PlacementDrive).count()
+    # Active drives counter (only count active lifecycle statuses)
+    active_statuses = ["PUBLISHED", "REGISTRATION_OPEN", "Active"]
+    active_drives_count = db.query(PlacementDrive).filter(PlacementDrive.status.in_(active_statuses)).count()
 
     return {
         "total_students": total_students,
@@ -221,7 +223,7 @@ def get_dashboard_analytics(
         "average_package": avg_pkg,
         "median_package": med_pkg,
         "at_risk_count": at_risk_count,
-        "active_drives_count": total_drives_count,
+        "active_drives_count": active_drives_count,
         "gender_stats": gender_stats,
         "branch_hiring": branch_hiring,
         "company_hiring": company_hiring,

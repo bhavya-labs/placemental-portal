@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc, asc
 from backend.app.database import get_db
 from backend.app.models import User, Student, Department, SystemLog, CorrectionRequest, Application, Interview, Feedback, PlacementDrive, Parent, ActivityAttendance
-from backend.app.schemas import StudentResponse, StudentUpdate, UserResponse, CorrectionRequestCreate, CorrectionRequestResponse, CorrectionRequestAction
+from backend.app.schemas import StudentResponse, StudentUpdate, UserResponse, CorrectionRequestCreate, CorrectionRequestResponse, CorrectionRequestAction, StudentVerificationRequest
 from backend.app.auth import get_current_user, get_password_hash, get_current_faculty, get_permitted_student_query, enforce_student_scope
 from backend.app.ml.predictor import predictor
 
@@ -582,7 +582,7 @@ def update_student(student_id: int, student_data: StudentUpdate, current_user: U
     # Update student model fields
     update_dict = student_data.model_dump(exclude_unset=True)
     
-    # Locked fields validation for verified students
+    # Locked fields validation for students
     if current_user.role == "student":
         for administrative_field in [
             "verification_status", "profile_completed", "readiness_score",
@@ -590,14 +590,15 @@ def update_student(student_id: int, student_data: StudentUpdate, current_user: U
         ]:
             update_dict.pop(administrative_field, None)
 
-        if student.verification_status == "VERIFIED" or student.profile_completed:
-            locked_fields = ["cgpa", "attendance", "backlogs", "dept_id", "batch", "section", "gender"]
-            for field in locked_fields:
-                if field in update_dict and update_dict[field] is not None and update_dict[field] != getattr(student, field):
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Academic metrics (CGPA, attendance, backlogs, department, batch, section, gender) cannot be modified on verified or completed profiles. Please submit a correction request."
-                    )
+        # Academic metrics cannot be modified directly by students without an approved correction request
+        locked_fields = ["cgpa", "attendance", "backlogs", "dept_id", "batch", "section", "gender",
+                         "sgpa_sem1", "sgpa_sem2", "sgpa_sem3", "sgpa_sem4", "sgpa_sem5", "sgpa_sem6", "sgpa_sem7", "sgpa_sem8"]
+        for field in locked_fields:
+            if field in update_dict and update_dict[field] is not None and update_dict[field] != getattr(student, field, None):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Academic metric '{field}' cannot be modified directly by students. Please submit a correction request for administrative review."
+                )
 
     # Handle list serialization for JSON columns
     if "skills" in update_dict and isinstance(update_dict["skills"], list):
@@ -613,8 +614,7 @@ def update_student(student_id: int, student_data: StudentUpdate, current_user: U
         setattr(student, key, value)
     
     student.profile_completed = True
-    if current_user.role == "student" and student.verification_status == "UNVERIFIED":
-        student.verification_status = "VERIFIED"
+    # SECURE: Students CANNOT self-verify. Verification status remains untouched on student update.
     db.commit()
 
     # Recalculate AI score on modification!
@@ -663,6 +663,69 @@ def update_student(student_id: int, student_data: StudentUpdate, current_user: U
     db.commit()
 
     return {"message": "Profile updated and AI predictions recalculated successfully!"}
+
+@router.put("/{student_id}/verify")
+def verify_student_profile(
+    student_id: int,
+    req: StudentVerificationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Authorized staff verification of student profiles.
+    Accessible only by Admin, Faculty coordinators, HOD, or TPO roles within their departmental scope.
+    """
+    if current_user.role not in ["admin", "faculty", "hod", "tpo"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Only authorized faculty coordinators, HOD, TPO or administrators can verify student profiles."
+        )
+
+    student = db.query(Student).filter(Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student profile not found")
+
+    # Admins have global authority; Faculty/HOD coordinators verify students in their department
+    if current_user.role in ["faculty", "hod"]:
+        faculty_dept_id = current_user.faculty_profile.dept_id if current_user.faculty_profile else None
+        if faculty_dept_id and student.dept_id != faculty_dept_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Faculty coordinator can only verify students in their assigned department."
+            )
+    target_status = (req.verification_status or "VERIFIED").upper().strip()
+    if target_status not in ["VERIFIED", "REJECTED", "UNVERIFIED"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid verification status. Allowed statuses: 'VERIFIED', 'REJECTED', 'UNVERIFIED'."
+        )
+
+    old_status = student.verification_status
+    student.verification_status = target_status
+
+    # Log verification action in system audit trail
+    log = SystemLog(
+        user_email=current_user.email,
+        action="VERIFY_STUDENT_PROFILE",
+        details=f"Staff {current_user.email} ({current_user.role}) changed verification status of Student ID {student.id} from '{old_status}' to '{target_status}'. Remarks: {req.remarks or 'None'}"
+    )
+    db.add(log)
+
+    # Send notification to student
+    from backend.app.models import Notification
+    db.add(Notification(
+        user_id=student.id,
+        title="Profile Verification Status Updated",
+        message=f"Your student profile verification status has been marked as '{target_status}' by {current_user.name}."
+    ))
+    db.commit()
+
+    return {
+        "message": f"Student verification status successfully updated to {target_status}",
+        "student_id": student.id,
+        "verification_status": student.verification_status,
+        "verified_by": current_user.email
+    }
 
 @router.post("/bulk-upload")
 def bulk_upload_students(

@@ -23,6 +23,13 @@ def apply_to_drive(
     if not drive:
         raise HTTPException(status_code=404, detail="Placement drive not found")
         
+    # Check drive lifecycle status
+    if drive.status in ["ARCHIVED", "CANCELLED", "DELETED", "DRAFT"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"This placement drive is {drive.status.lower()} and is no longer accepting applications"
+        )
+
     # Check deadline
     if date.today() > drive.deadline:
         raise HTTPException(status_code=400, detail="Application deadline has passed")
@@ -153,12 +160,21 @@ def get_student_applications(
     results = []
     
     for app in applications:
+        drive = app.drive
+        company_name = "Archived / Legacy Drive"
+        role = "N/A"
+        package_lpa = 0.0
+        if drive:
+            company_name = drive.company.name if drive.company else "Unknown Company"
+            role = drive.role or "N/A"
+            package_lpa = drive.package_lpa or 0.0
+
         results.append({
             "id": app.id,
             "drive_id": app.drive_id,
-            "company_name": app.drive.company.name,
-            "role": app.drive.role,
-            "package_lpa": app.drive.package_lpa,
+            "company_name": company_name,
+            "role": role,
+            "package_lpa": package_lpa,
             "status": app.status,
             "current_round": app.current_round,
             "joining_status": app.joining_status,
