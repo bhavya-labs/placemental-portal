@@ -11,7 +11,7 @@ from alembic import context
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from backend.app.config import settings
-from backend.app.database import Base
+from backend.app.database import Base, normalize_database_url
 from backend.app.models import (
     Department, User, Student, Faculty, Company, PlacementDrive,
     Application, Interview, Feedback, Notification, SystemLog,
@@ -25,7 +25,8 @@ import os
 config = context.config
 
 # Dynamically set sqlalchemy.url from environment, explicit config, or project settings
-dynamic_url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url") or settings.DATABASE_URL
+raw_url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url") or settings.DATABASE_URL
+dynamic_url = normalize_database_url(raw_url)
 config.set_main_option("sqlalchemy.url", dynamic_url)
 
 # Interpret the config file for Python logging.

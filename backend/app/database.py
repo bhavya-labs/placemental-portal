@@ -4,9 +4,33 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from backend.app.config import settings
 
+def normalize_database_url(url: str) -> str:
+    """
+    Normalize PostgreSQL database URLs to ensure the explicit psycopg2 driver
+    dialect (postgresql+psycopg2://) is used and deprecated prefixes are corrected.
+    
+    Handles:
+      - postgres:// -> postgresql+psycopg2:// (Render default prefix)
+      - postgresql:// -> postgresql+psycopg2:// (Standard dialect without driver)
+      - postgresql+psycopg:// -> postgresql+psycopg2:// (psycopg3 prefix mapped to psycopg2)
+      - postgresql+psycopg2:// -> untouched
+      - sqlite:///... -> untouched
+    """
+    if not url:
+        return url
+    url = url.strip()
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg2://" + url[len("postgres://"):]
+    if url.startswith("postgresql+psycopg://"):
+        return "postgresql+psycopg2://" + url[len("postgresql+psycopg://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url
+
 # Configure database engine options based on dialect
+normalized_url = normalize_database_url(settings.DATABASE_URL)
 engine_kwargs = {}
-if settings.DATABASE_URL.startswith("sqlite"):
+if normalized_url.startswith("sqlite"):
     engine_kwargs["connect_args"] = {"check_same_thread": False}
 else:
     # Enterprise connection pooling for PostgreSQL / production databases
@@ -16,7 +40,7 @@ else:
     engine_kwargs["pool_pre_ping"] = True
 
 engine = create_engine(
-    settings.DATABASE_URL,
+    normalized_url,
     **engine_kwargs
 )
 

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Base directory for resolving .env file
@@ -14,6 +15,20 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 hours
     DATABASE_URL: str = "sqlite:///./placement_portal.db"
+
+    @field_validator("DATABASE_URL", mode="after")
+    @classmethod
+    def normalize_database_url_setting(cls, v: str) -> str:
+        if not v:
+            return v
+        v = v.strip()
+        if v.startswith("postgres://"):
+            return "postgresql+psycopg2://" + v[len("postgres://"):]
+        if v.startswith("postgresql+psycopg://"):
+            return "postgresql+psycopg2://" + v[len("postgresql+psycopg://"):]
+        if v.startswith("postgresql://"):
+            return "postgresql+psycopg2://" + v[len("postgresql://"):]
+        return v
 
     # CORS Allowed Origins (comma-separated list for Vite dev and production)
     FRONTEND_ORIGIN: str = "http://localhost:5173,http://127.0.0.1:5173,https://bhavya-labs.github.io"
