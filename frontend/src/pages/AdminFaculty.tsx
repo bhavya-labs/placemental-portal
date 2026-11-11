@@ -77,6 +77,18 @@ export const AdminFaculty: React.FC = () => {
     setIsDeleteOpen(true);
   };
 
+  const formatApiError = (err: any, fallback: string): string => {
+    if (err?.response?.data?.detail) {
+      const detail = err.response.data.detail;
+      if (typeof detail === 'string') return detail;
+      if (Array.isArray(detail)) {
+        return detail.map((d: any) => d.msg || (d.loc ? `${d.loc.slice(-1)}: ${d.msg}` : JSON.stringify(d))).join('; ');
+      }
+      return JSON.stringify(detail);
+    }
+    return err?.message || fallback;
+  };
+
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!password.trim()) {
@@ -95,7 +107,7 @@ export const AdminFaculty: React.FC = () => {
       setIsAddOpen(false);
       loadFaculties();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to register faculty.', 'error');
+      showToast(formatApiError(err, 'Failed to register faculty.'), 'error');
     }
   };
 
@@ -112,7 +124,7 @@ export const AdminFaculty: React.FC = () => {
       setIsEditOpen(false);
       loadFaculties();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to update details.', 'error');
+      showToast(formatApiError(err, 'Failed to update details.'), 'error');
     }
   };
 
@@ -124,7 +136,7 @@ export const AdminFaculty: React.FC = () => {
       setIsDeleteOpen(false);
       loadFaculties();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to delete account.', 'error');
+      showToast(formatApiError(err, 'Failed to delete account.'), 'error');
     }
   };
 

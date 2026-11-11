@@ -36,6 +36,8 @@ export const AdminStudents: React.FC = () => {
   const [attendance, setAttendance] = useState<number>(85.0);
   const [backlogs, setBacklogs] = useState<number>(0);
   const [skills, setSkills] = useState('Java, SQL');
+  const [section, setSection] = useState('A');
+  const [status, setStatus] = useState('Unplaced');
 
   // Bulk Upload State
   const [bulkInput, setBulkInput] = useState('');
@@ -119,14 +121,17 @@ export const AdminStudents: React.FC = () => {
     try {
       const details = await studentService.getStudentById(std.id);
       setSelectedStudent(details);
-      setName(details.name || '');
-      setDeptId(details.dept_id || 1);
-      setGender(details.gender || 'Male');
-      setBatch(details.batch || '2026');
+      setName(details.name || std.name || '');
+      setEmail(details.email || std.email || '');
+      setDeptId(details.dept_id || std.dept_id || 1);
+      setGender(details.gender || std.gender || 'Male');
+      setBatch(details.batch || std.batch || '2026');
+      setSection(details.section || std.section || 'A');
+      setStatus(details.status || std.status || 'Unplaced');
       setPhone(details.phone || '9876543210');
-      setCgpa(details.cgpa);
-      setAttendance(details.attendance);
-      setBacklogs(details.backlogs);
+      setCgpa(details.cgpa !== undefined && details.cgpa !== null ? details.cgpa : 8.0);
+      setAttendance(details.attendance !== undefined && details.attendance !== null ? details.attendance : 85.0);
+      setBacklogs(details.backlogs !== undefined && details.backlogs !== null ? details.backlogs : 0);
       const parsed = parseSkills(details.skills);
       setSkills(parsed.join(', '));
       setIsEditOpen(true);
@@ -203,17 +208,35 @@ export const AdminStudents: React.FC = () => {
     try {
       const skillsArr = skills.split(',').map(s => s.trim()).filter(Boolean);
       await studentService.updateStudent(selectedStudent.id, {
-        phone,
-        cgpa,
-        attendance,
-        backlogs,
+        name: name.trim(),
+        email: email.trim(),
+        dept_id: Number(deptId),
+        gender,
+        batch: batch.trim() || '2026',
+        section: section.trim() || 'A',
+        status,
+        phone: phone.trim(),
+        cgpa: Number(cgpa),
+        attendance: Number(attendance),
+        backlogs: Number(backlogs),
         skills: skillsArr
       });
-      showToast('Student credentials updated!', 'success');
+      showToast('Student credentials and registry updated successfully!', 'success');
       setIsEditOpen(false);
       loadStudents();
     } catch (err: any) {
-      showToast(err.response?.data?.detail || 'Failed to update credentials.', 'error');
+      let errMsg = 'Failed to update credentials.';
+      if (err.response?.data?.detail) {
+        const detail = err.response.data.detail;
+        if (typeof detail === 'string') {
+          errMsg = detail;
+        } else if (Array.isArray(detail)) {
+          errMsg = detail.map((d: any) => d.msg || (d.loc ? `${d.loc.slice(-1)}: ${d.msg}` : JSON.stringify(d))).join('; ');
+        } else {
+          errMsg = JSON.stringify(detail);
+        }
+      }
+      showToast(errMsg, 'error');
     }
   };
 
@@ -819,9 +842,9 @@ export const AdminStudents: React.FC = () => {
       {/* EDIT DIALOG MODAL */}
       {isEditOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-30 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-gov-border dark:border-slate-805 p-6 rounded-lg max-w-md w-full text-xs space-y-4">
+          <div className="bg-white dark:bg-slate-900 border border-gov-border dark:border-slate-805 p-6 rounded-lg max-w-xl w-full text-xs space-y-4 max-h-[90vh] overflow-y-auto shadow-2xl">
             <div className="flex justify-between items-center border-b border-gov-border dark:border-slate-850 pb-3">
-              <h4 className="text-sm font-bold text-gov-navy dark:text-slate-200 uppercase">Modify Student Credentials</h4>
+              <h4 className="text-sm font-bold text-gov-navy dark:text-slate-200 uppercase">Modify Student Credentials & Registry</h4>
               <button onClick={() => setIsEditOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X size={16} />
               </button>
@@ -830,52 +853,148 @@ export const AdminStudents: React.FC = () => {
             <form onSubmit={handleEditSubmit} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label htmlFor="edit-std-phone" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Phone No</label>
+                  <label htmlFor="edit-std-name" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Full Name *</label>
+                  <input
+                    id="edit-std-name"
+                    type="text"
+                    required
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 dark:text-slate-100 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="edit-std-email" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Official Email Address *</label>
+                  <input
+                    id="edit-std-email"
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 dark:text-slate-100 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label htmlFor="edit-std-dept" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Branch *</label>
+                  <select
+                    id="edit-std-dept"
+                    value={deptId}
+                    onChange={(e) => setDeptId(Number(e.target.value))}
+                    className="mt-1 w-full p-2 border border-gov-border rounded bg-white dark:bg-slate-955 focus:outline-none"
+                  >
+                    <option value="1">CSE</option>
+                    <option value="2">IT</option>
+                    <option value="3">ECE</option>
+                    <option value="4">EEE</option>
+                    <option value="5">MECH</option>
+                    <option value="6">CIVIL</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="edit-std-gender" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Gender</label>
+                  <select
+                    id="edit-std-gender"
+                    value={gender}
+                    onChange={(e) => setGender(e.target.value)}
+                    className="mt-1 w-full p-2 border border-gov-border rounded bg-white dark:bg-slate-955 focus:outline-none"
+                  >
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="edit-std-section" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Section</label>
+                  <input
+                    id="edit-std-section"
+                    type="text"
+                    value={section}
+                    onChange={(e) => setSection(e.target.value)}
+                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 dark:text-slate-100 focus:outline-none"
+                    placeholder="A"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label htmlFor="edit-std-batch" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Batch Year</label>
+                  <input
+                    id="edit-std-batch"
+                    type="text"
+                    value={batch}
+                    onChange={(e) => setBatch(e.target.value)}
+                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 dark:text-slate-100 focus:outline-none"
+                    placeholder="2026"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="edit-std-status" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Placement Status</label>
+                  <select
+                    id="edit-std-status"
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value)}
+                    className="mt-1 w-full p-2 border border-gov-border rounded bg-white dark:bg-slate-955 focus:outline-none"
+                  >
+                    <option value="Unplaced">Unplaced</option>
+                    <option value="Placed">Placed</option>
+                    <option value="At Risk">At Risk</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="edit-std-phone" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Phone No *</label>
                   <input
                     id="edit-std-phone"
                     type="text"
                     required
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-955 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="edit-std-cgpa" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">CGPA Score</label>
-                  <input
-                    id="edit-std-cgpa"
-                    type="number"
-                    step="0.01"
-                    required
-                    value={cgpa}
-                    onChange={(e) => setCgpa(Number(e.target.value))}
-                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 focus:outline-none"
+                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 dark:text-slate-100 focus:outline-none"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label htmlFor="edit-std-attendance" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Attendance %</label>
+                  <label htmlFor="edit-std-cgpa" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">CGPA Score *</label>
+                  <input
+                    id="edit-std-cgpa"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="10"
+                    required
+                    value={cgpa}
+                    onChange={(e) => setCgpa(Number(e.target.value))}
+                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 dark:text-slate-100 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="edit-std-attendance" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Attendance % *</label>
                   <input
                     id="edit-std-attendance"
                     type="number"
                     step="0.1"
+                    min="0"
+                    max="100"
                     required
                     value={attendance}
                     onChange={(e) => setAttendance(Number(e.target.value))}
-                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 focus:outline-none"
+                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 dark:text-slate-100 focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label htmlFor="edit-std-backlogs" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Backlogs count</label>
+                  <label htmlFor="edit-std-backlogs" className="block font-bold text-slate-655 dark:text-slate-400 uppercase">Backlogs *</label>
                   <input
                     id="edit-std-backlogs"
                     type="number"
+                    min="0"
                     required
                     value={backlogs}
                     onChange={(e) => setBacklogs(Number(e.target.value))}
-                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 focus:outline-none"
+                    className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-950 dark:text-slate-100 focus:outline-none"
                   />
                 </div>
               </div>
@@ -888,6 +1007,7 @@ export const AdminStudents: React.FC = () => {
                   value={skills}
                   onChange={(e) => setSkills(e.target.value)}
                   className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-955 focus:outline-none"
+                  placeholder="Java, Python, React"
                 />
               </div>
 

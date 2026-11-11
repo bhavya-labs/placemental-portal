@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, date
 
 # Token schemas
@@ -95,6 +95,16 @@ class StudentCreate(StudentBase):
     dept_id: int
 
 class StudentUpdate(BaseModel):
+    # Administrative & identity fields (editable by Admin/Privileged roles)
+    name: Optional[str] = None
+    email: Optional[str] = None
+    dept_id: Optional[int] = None
+    batch: Optional[str] = None
+    section: Optional[str] = None
+    gender: Optional[str] = None
+    status: Optional[str] = None
+
+    # Academic & metric fields
     phone: Optional[str] = None
     cgpa: Optional[float] = None
     attendance: Optional[float] = None
@@ -107,10 +117,12 @@ class StudentUpdate(BaseModel):
     sgpa_sem6: Optional[float] = None
     sgpa_sem7: Optional[float] = None
     sgpa_sem8: Optional[float] = None
-    skills: Optional[str] = None
-    projects: Optional[str] = None
-    internships: Optional[str] = None
-    certifications: Optional[str] = None
+
+    # Skills and project fields (support both list of strings and formatted string)
+    skills: Optional[Union[List[str], str]] = None
+    projects: Optional[Union[List[Dict[str, Any]], List[str], str]] = None
+    internships: Optional[Union[List[Dict[str, Any]], List[str], str]] = None
+    certifications: Optional[Union[List[Dict[str, Any]], List[str], str]] = None
     github_url: Optional[str] = None
     linkedin_url: Optional[str] = None
     leetcode_score: Optional[int] = None
@@ -147,6 +159,18 @@ class FacultyBase(BaseModel):
 
 class FacultyCreate(FacultyBase):
     dept_id: int
+
+class FacultyCreateRequest(BaseModel):
+    name: str
+    email: str
+    password: str = "password123"
+    dept_id: int
+    designation: str
+
+class FacultyUpdateRequest(BaseModel):
+    name: str
+    dept_id: int
+    designation: str
 
 class FacultyResponse(FacultyBase):
     id: int

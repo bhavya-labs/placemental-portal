@@ -3,8 +3,11 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
-from backend.app.models import User, Student, Faculty, Department
-from backend.app.schemas import UserCreate, UserLogin, Token, UserResponse, StudentResponse, FacultyResponse
+from backend.app.models import User, Student, Faculty, Department, Permission, SystemLog
+from backend.app.schemas import (
+    UserCreate, UserLogin, Token, UserResponse, StudentResponse, FacultyResponse,
+    FacultyCreateRequest, FacultyUpdateRequest
+)
 from backend.app.auth import verify_password, get_password_hash, create_access_token, get_current_user
 from backend.app.config import settings
 
@@ -175,19 +178,6 @@ def get_profile(current_user: User = Depends(get_current_user), db: Session = De
 
     return response
 
-from pydantic import BaseModel
-
-class FacultyCreateRequest(BaseModel):
-    name: str
-    email: str
-    password: str = "password123"
-    dept_id: int
-    designation: str
-
-class FacultyUpdateRequest(BaseModel):
-    name: str
-    dept_id: int
-    designation: str
 
 @router.get("/faculty")
 def get_faculty_accounts(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -238,20 +228,75 @@ def create_faculty_account(payload: FacultyCreateRequest, current_user: User = D
     return {"message": "Faculty account successfully registered!", "faculty_id": user_rec.id}
 
 @router.put("/faculty/{faculty_id}")
-def update_faculty_account(faculty_id: int, payload: FacultyUpdateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def update_faculty_account(
+    faculty_id: int,
+    payload: FacultyUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Access denied")
-        
+        raise HTTPException(status_code=403, detail="Access denied: Admin role required")
+
     faculty = db.query(Faculty).filter(Faculty.id == faculty_id).first()
     if not faculty:
         raise HTTPException(status_code=404, detail="Faculty member not found")
-        
-    faculty.user.name = payload.name
-    faculty.dept_id = payload.dept_id
-    faculty.designation = payload.designation
-    db.commit()
-    
-    return {"message": "Faculty details modified successfully!"}
+
+    clean_name = payload.name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Faculty name cannot be empty")
+
+    clean_designation = payload.designation.strip()
+    if not clean_designation:
+        raise HTTPException(status_code=400, detail="Faculty designation cannot be empty")
+
+    # 1. Validate destination department
+    target_dept = db.query(Department).filter(Department.id == payload.dept_id).first()
+    if not target_dept:
+        raise HTTPException(status_code=400, detail=f"Invalid department ID: {payload.dept_id} does not exist")
+
+    # 2. Update faculty record and synchronize active department-scoped permissions in a single transaction
+    try:
+        faculty.user.name = clean_name
+        faculty.dept_id = target_dept.id
+        faculty.designation = clean_designation
+
+        # Synchronize ONLY active department-scoped permissions for this faculty user
+        # Uses the actual destination Department.code for permission scope values
+        # Preserves inactive, expired, and non-department-scoped permissions (e.g. ALL, SECTION)
+        dept_permissions = db.query(Permission).filter(
+            Permission.user_id == faculty.user.id,
+            Permission.scope == "DEPARTMENT",
+            Permission.status == "Active"
+        ).all()
+
+        for perm in dept_permissions:
+            perm.scope_value = target_dept.code
+
+        # Log administrative action
+        log = SystemLog(
+            user_email=current_user.email,
+            action="UPDATE_FACULTY_COORDINATOR",
+            details=f"Faculty ID {faculty.id} updated: Name='{clean_name}', Department={target_dept.code} ({target_dept.id}), Designation='{clean_designation}'. Synchronized {len(dept_permissions)} department permission(s)."
+        )
+        db.add(log)
+
+        # Single atomic commit
+        db.commit()
+        db.refresh(faculty)
+
+        return {
+            "message": "Faculty details and department permissions synchronized successfully!",
+            "faculty_id": faculty.id,
+            "dept_id": faculty.dept_id,
+            "dept_code": target_dept.code,
+            "permissions_updated": len(dept_permissions)
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update faculty account: {str(e)}")
 
 @router.delete("/faculty/{faculty_id}")
 def delete_faculty_account(faculty_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):

@@ -573,6 +573,29 @@ def get_student_by_id(student_id: int, current_user: User = Depends(get_current_
         "section": student.section
     }
 
+def normalize_skills_to_json(value) -> str:
+    """Normalize skills input from array, JSON string, or comma-separated string to valid JSON list string."""
+    if value is None:
+        return "[]"
+    if isinstance(value, list):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return json.dumps(cleaned)
+    if isinstance(value, str):
+        val_str = value.strip()
+        if not val_str:
+            return "[]"
+        try:
+            parsed = json.loads(val_str)
+            if isinstance(parsed, list):
+                cleaned = [str(item).strip() for item in parsed if str(item).strip()]
+                return json.dumps(cleaned)
+        except (json.JSONDecodeError, ValueError):
+            pass
+        items = [item.strip() for item in val_str.split(",") if item.strip()]
+        return json.dumps(items)
+    return "[]"
+
+
 @router.put("/{student_id}")
 def update_student(student_id: int, student_data: StudentUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if current_user.role == "parent":
@@ -581,18 +604,14 @@ def update_student(student_id: int, student_data: StudentUpdate, current_user: U
 
     # Update student model fields
     update_dict = student_data.model_dump(exclude_unset=True)
-    
-    # Locked fields validation for students
-    if current_user.role == "student":
-        for administrative_field in [
-            "verification_status", "profile_completed", "readiness_score",
-            "placement_probability", "status", "ai_recommendations"
-        ]:
-            update_dict.pop(administrative_field, None)
 
-        # Academic metrics cannot be modified directly by students without an approved correction request
-        locked_fields = ["cgpa", "attendance", "backlogs", "dept_id", "batch", "section", "gender",
-                         "sgpa_sem1", "sgpa_sem2", "sgpa_sem3", "sgpa_sem4", "sgpa_sem5", "sgpa_sem6", "sgpa_sem7", "sgpa_sem8"]
+    # 1. Role-specific validation and field governance
+    if current_user.role == "student":
+        # Academic & institutional registry fields cannot be modified directly by students without an approved correction request
+        locked_fields = [
+            "cgpa", "attendance", "backlogs", "dept_id", "batch", "section", "gender", "status",
+            "sgpa_sem1", "sgpa_sem2", "sgpa_sem3", "sgpa_sem4", "sgpa_sem5", "sgpa_sem6", "sgpa_sem7", "sgpa_sem8"
+        ]
         for field in locked_fields:
             if field in update_dict and update_dict[field] is not None and update_dict[field] != getattr(student, field, None):
                 raise HTTPException(
@@ -600,69 +619,111 @@ def update_student(student_id: int, student_data: StudentUpdate, current_user: U
                     detail=f"Academic metric '{field}' cannot be modified directly by students. Please submit a correction request for administrative review."
                 )
 
-    # Handle list serialization for JSON columns
-    if "skills" in update_dict and isinstance(update_dict["skills"], list):
-        update_dict["skills"] = json.dumps(update_dict["skills"])
-    if "projects" in update_dict and isinstance(update_dict["projects"], list):
-        update_dict["projects"] = json.dumps(update_dict["projects"])
-    if "certifications" in update_dict and isinstance(update_dict["certifications"], list):
-        update_dict["certifications"] = json.dumps(update_dict["certifications"])
-    if "internships" in update_dict and isinstance(update_dict["internships"], list):
-        update_dict["internships"] = json.dumps(update_dict["internships"])
+        # Disallow administrative/institutional overrides by students
+        for admin_field in [
+            "name", "email", "dept_id", "batch", "section", "gender", "status",
+            "verification_status", "profile_completed", "readiness_score",
+            "placement_probability", "ai_recommendations"
+        ]:
+            update_dict.pop(admin_field, None)
+    elif current_user.role in ["admin", "tnp"]:
+        # Admin / TNP can update student user name & email with uniqueness validation
+        if "name" in update_dict:
+            clean_name = str(update_dict.pop("name") or "").strip()
+            if not clean_name:
+                raise HTTPException(status_code=400, detail="Student name cannot be empty")
+            student.user.name = clean_name
 
-    for key, value in update_dict.items():
-        setattr(student, key, value)
-    
-    student.profile_completed = True
-    # SECURE: Students CANNOT self-verify. Verification status remains untouched on student update.
-    db.commit()
+        if "email" in update_dict:
+            clean_email = str(update_dict.pop("email") or "").strip().lower()
+            if not clean_email or "@" not in clean_email:
+                raise HTTPException(status_code=400, detail="A valid email address is required")
+            if clean_email != student.user.email.lower():
+                existing = db.query(User).filter(User.email == clean_email, User.id != student.id).first()
+                if existing:
+                    raise HTTPException(status_code=400, detail="Email address is already in use by another account")
+                student.user.email = clean_email
 
-    # Recalculate AI score on modification!
-    report = predictor.evaluate_student(student, db)
-    student.readiness_score = report["readiness_score"]
-    student.placement_probability = report["placement_probability"]
-    student.ai_recommendations = json.dumps({
-        "skills_gap": report["skills_gap"],
-        "recommended_skills": report["recommended_skills"],
-        "recommended_projects": report["recommended_projects"],
-        "recommended_certifications": report["recommended_certifications"],
-        "improvement_tips": report["improvement_tips"]
-    })
-    
-    if student.batch == "2026" and student.status != "Placed":
-        student.status = "At Risk" if report["at_risk"] else "Unplaced"
-        
-    db.commit()
-    db.refresh(student)
+        # Validate department if provided
+        if "dept_id" in update_dict and update_dict["dept_id"] is not None:
+            target_dept = db.query(Department).filter(Department.id == update_dict["dept_id"]).first()
+            if not target_dept:
+                raise HTTPException(status_code=400, detail=f"Invalid department ID: {update_dict['dept_id']} does not exist")
+    else:
+        # Faculty / HOD: pop user identity and department reassignment fields
+        update_dict.pop("name", None)
+        update_dict.pop("email", None)
+        update_dict.pop("dept_id", None)
 
-    # Trigger low attendance notifications (Req 12)
-    if student.attendance < 75.0:
-        from backend.app.models import Notification
-        db.add(Notification(
-            user_id=student.id,
-            title="Attendance Warning",
-            message=f"Warning: Your academic attendance is {student.attendance}%, which is below the required 75% threshold."
-        ))
-        db.add(Notification(
-            user_id=student.id,
-            title="[Parent Alert] Academic Attendance Warning",
-            message=f"Important: Your ward {student.user.name}'s attendance has dropped to {student.attendance}%, which is below the minimum required 75% for placement eligibility."
-        ))
-        staff_members = db.query(User).filter(User.role.in_(["faculty", "hod"])).all()
-        for staff in staff_members:
-            db.add(Notification(
-                user_id=staff.id,
-                title="Student Attendance Issue",
-                message=f"Alert: Student {student.user.name} ({student.id}) has a low attendance of {student.attendance}%."
-            ))
+    # 2. Normalize skills into valid JSON list storage
+    if "skills" in update_dict:
+        update_dict["skills"] = normalize_skills_to_json(update_dict["skills"])
+
+    for col in ["projects", "certifications", "internships"]:
+        if col in update_dict and isinstance(update_dict[col], (list, dict)):
+            update_dict[col] = json.dumps(update_dict[col])
+
+    # 3. Apply updates atomically with rollback safety
+    try:
+        for key, value in update_dict.items():
+            setattr(student, key, value)
+
+        student.profile_completed = True
+        # SECURE: Students CANNOT self-verify. Verification status remains untouched on student update.
         db.commit()
 
-    # Log action
-    log = SystemLog(user_email=current_user.email, action="Update Profile", details=f"Student ID {student.id} updated their profile details.")
-    db.add(log)
-    db.commit()
+        # Recalculate AI score on modification!
+        report = predictor.evaluate_student(student, db)
+        student.readiness_score = report["readiness_score"]
+        student.placement_probability = report["placement_probability"]
+        student.ai_recommendations = json.dumps({
+            "skills_gap": report["skills_gap"],
+            "recommended_skills": report["recommended_skills"],
+            "recommended_projects": report["recommended_projects"],
+            "recommended_certifications": report["recommended_certifications"],
+            "improvement_tips": report["improvement_tips"]
+        })
 
-    return {"message": "Profile updated and AI predictions recalculated successfully!"}
+        if student.batch == "2026" and student.status != "Placed":
+            student.status = "At Risk" if report["at_risk"] else "Unplaced"
+
+        db.commit()
+        db.refresh(student)
+
+        # Trigger low attendance notifications (Req 12)
+        if student.attendance is not None and student.attendance < 75.0:
+            from backend.app.models import Notification
+            db.add(Notification(
+                user_id=student.id,
+                title="Attendance Warning",
+                message=f"Warning: Your academic attendance is {student.attendance}%, which is below the required 75% threshold."
+            ))
+            db.add(Notification(
+                user_id=student.id,
+                title="[Parent Alert] Academic Attendance Warning",
+                message=f"Important: Your ward {student.user.name}'s attendance has dropped to {student.attendance}%, which is below the minimum required 75% for placement eligibility."
+            ))
+            staff_members = db.query(User).filter(User.role.in_(["faculty", "hod"])).all()
+            for staff in staff_members:
+                db.add(Notification(
+                    user_id=staff.id,
+                    title="Student Attendance Issue",
+                    message=f"Alert: Student {student.user.name} ({student.id}) has a low attendance of {student.attendance}%."
+                ))
+            db.commit()
+
+        # Log action
+        log = SystemLog(user_email=current_user.email, action="Update Profile", details=f"Student ID {student.id} profile updated by {current_user.email}.")
+        db.add(log)
+        db.commit()
+
+        return {"message": "Profile updated and AI predictions recalculated successfully!", "student_id": student.id}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update student profile: {str(e)}")
 
 @router.put("/{student_id}/verify")
 def verify_student_profile(
