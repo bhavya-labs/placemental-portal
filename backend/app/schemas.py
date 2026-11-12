@@ -229,6 +229,9 @@ class PlacementDriveResponse(PlacementDriveBase):
     id: int
     company_id: int
     company: CompanyResponse
+    effective_status: Optional[str] = None
+    is_registration_open: Optional[bool] = None
+    is_archived: Optional[bool] = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -236,6 +239,9 @@ class PlacementDriveUpdateResponse(PlacementDriveBase):
     id: int
     company_id: int
     company_name: Optional[str] = ""
+    effective_status: Optional[str] = None
+    is_registration_open: Optional[bool] = None
+    is_archived: Optional[bool] = None
     lifecycle_status: Optional[str] = None
     created_at: Optional[datetime] = None
     model_config = ConfigDict(from_attributes=True)

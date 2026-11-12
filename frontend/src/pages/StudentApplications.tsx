@@ -38,7 +38,7 @@ export const StudentApplications: React.FC = () => {
       const details = await studentService.getStudentById(user.id);
       setStudentDetails(details);
 
-      const activeDrives = await driveService.getDrives('Active');
+      const activeDrives = await driveService.getDrives();
       setDrives(activeDrives);
 
       const apps = await applicationService.getStudentApplications(user.id);
@@ -193,6 +193,16 @@ export const StudentApplications: React.FC = () => {
                             <div className="text-right">
                               <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-red-50 text-red-750 text-[10px] font-bold uppercase border border-red-200">
                                 <ShieldAlert size={12} /> Ineligible
+                              </span>
+                            </div>
+                          ) : (drive.is_registration_open === false) ? (
+                            <div className="text-right">
+                              <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-bold uppercase border ${
+                                ['SCHEDULED', 'Upcoming', 'UPCOMING'].includes(drive.status)
+                                  ? 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300'
+                                  : 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300'
+                              }`}>
+                                {['SCHEDULED', 'Upcoming', 'UPCOMING'].includes(drive.status) ? 'Registration Not Open' : 'Registration Closed'}
                               </span>
                             </div>
                           ) : (

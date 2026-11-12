@@ -1,8 +1,70 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
-from typing import List, Optional
-from datetime import date
+from sqlalchemy import or_, and_, func
+from typing import List, Optional, Union, Dict, Any
+from datetime import date, datetime, timezone, timedelta
+
+# India Standard Time (UTC+05:30) helper for consistent date boundary handling
+IST_TIMEZONE = timezone(timedelta(hours=5, minutes=30))
+
+def get_ist_date() -> date:
+    """Return the current date in India Standard Time (UTC+05:30)."""
+    return datetime.now(IST_TIMEZONE).date()
+
+def parse_date_param(val: Optional[Union[date, str]]) -> Optional[date]:
+    """Safely parse a date parameter passed as string or date object."""
+    if not val:
+        return None
+    if isinstance(val, date):
+        return val
+    val_str = str(val).strip()
+    if not val_str:
+        return None
+    try:
+        return datetime.strptime(val_str, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+def build_dept_filter(dept_code: str):
+    """
+    Construct exact boundary matching condition for allowed departments.
+    Prevents substring false positives (e.g. 'IT' matching 'CIVIL', or 'CE' matching 'ECE').
+    """
+    clean = dept_code.strip().upper()
+    return or_(
+        PlacementDrive.allowed_depts.ilike("ALL"),
+        PlacementDrive.allowed_depts.ilike("ALL,%"),
+        PlacementDrive.allowed_depts.ilike("ALL, %"),
+        PlacementDrive.allowed_depts.ilike("%,ALL"),
+        PlacementDrive.allowed_depts.ilike("%, ALL"),
+        PlacementDrive.allowed_depts.ilike("%,ALL,%"),
+        PlacementDrive.allowed_depts.ilike("%, ALL,%"),
+        PlacementDrive.allowed_depts == clean,
+        func.trim(PlacementDrive.allowed_depts).ilike(clean),
+        PlacementDrive.allowed_depts.ilike(f"{clean},%"),
+        PlacementDrive.allowed_depts.ilike(f"{clean}, %"),
+        PlacementDrive.allowed_depts.ilike(f"%,{clean}"),
+        PlacementDrive.allowed_depts.ilike(f"%, {clean}"),
+        PlacementDrive.allowed_depts.ilike(f"%,{clean},%"),
+        PlacementDrive.allowed_depts.ilike(f"%, {clean},%"),
+        PlacementDrive.allowed_depts.ilike(f"%,{clean}, %"),
+        PlacementDrive.allowed_depts.ilike(f"%, {clean}, %"),
+    )
+
+# Canonical lifecycle statuses
+STATUS_DRAFT = "DRAFT"
+STATUS_SCHEDULED = "SCHEDULED"
+STATUS_REGISTRATION_OPEN = "REGISTRATION_OPEN"
+STATUS_REGISTRATION_CLOSED = "REGISTRATION_CLOSED"
+STATUS_ONGOING = "ONGOING"
+STATUS_COMPLETED = "COMPLETED"
+STATUS_ARCHIVED = "ARCHIVED"
+
+# Status groups for backward compatibility with existing records
+ACTIVE_STATUSES = ["REGISTRATION_OPEN", "PUBLISHED", "Active"]
+SCHEDULED_STATUSES = ["SCHEDULED", "Upcoming", "UPCOMING"]
+ONGOING_STATUSES = ["ONGOING", "ASSESSMENT", "INTERVIEW", "RESULT_DECLARED"]
+COMPLETED_STATUSES = ["COMPLETED", "Completed"]
 from backend.app.database import get_db
 from backend.app.models import User, Company, PlacementDrive, Student, Application, Department, SystemLog
 from backend.app.schemas import CompanyCreate, PlacementDriveCreate, PlacementDriveUpdateResponse
@@ -153,35 +215,185 @@ def broadcast_drive_notification(
 @router.get("/api/drives")
 def get_drives(
     status_filter: Optional[str] = None,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    dept: Optional[str] = None,
+    location: Optional[str] = None,
+    reg_status: Optional[str] = None,
+    date_from: Optional[Union[date, str]] = None,
+    date_to: Optional[Union[date, str]] = None,
+    page: Optional[int] = None,
+    page_size: Optional[int] = None,
+    limit: Optional[int] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     query = db.query(PlacementDrive).join(Company)
-    if status_filter:
-        if status_filter.upper() == "ACTIVE":
-            query = query.filter(PlacementDrive.status.in_(["REGISTRATION_OPEN", "PUBLISHED"]))
+    
+    # 1. Lifecycle status filter
+    effective_status = status_filter if status_filter is not None else status
+    if effective_status and effective_status.strip().upper() != "ALL":
+        s_norm = effective_status.strip().upper()
+        if s_norm == "ACTIVE":
+            query = query.filter(PlacementDrive.status.in_(ACTIVE_STATUSES))
+        elif s_norm == "ARCHIVED":
+            query = query.filter(PlacementDrive.status == STATUS_ARCHIVED)
+        elif s_norm in ["SCHEDULED", "UPCOMING"]:
+            query = query.filter(PlacementDrive.status.in_(SCHEDULED_STATUSES))
+        elif s_norm in ["ONGOING", "ASSESSMENT", "INTERVIEW"]:
+            query = query.filter(PlacementDrive.status.in_(ONGOING_STATUSES))
+        elif s_norm == "COMPLETED":
+            query = query.filter(PlacementDrive.status.in_(COMPLETED_STATUSES))
+        elif s_norm == "DRAFT":
+            query = query.filter(PlacementDrive.status == STATUS_DRAFT)
+        elif s_norm == "REGISTRATION_CLOSED":
+            query = query.filter(PlacementDrive.status == STATUS_REGISTRATION_CLOSED)
         else:
-            query = query.filter(PlacementDrive.status == status_filter)
-    
-    results = query.order_by(PlacementDrive.interview_date).all()
-    
+            query = query.filter(PlacementDrive.status.ilike(effective_status))
+    else:
+        # Default: EXCLUDE archived drives from normal active listings
+        query = query.filter(PlacementDrive.status != STATUS_ARCHIVED)
+
+    # 2. Search filter (case-insensitive partial matching on Company.name, PlacementDrive.role, PlacementDrive.job_id)
+    if search and search.strip():
+        clean_search = search.strip()
+        query = query.filter(
+            or_(
+                Company.name.ilike(f"%{clean_search}%"),
+                PlacementDrive.role.ilike(f"%{clean_search}%"),
+                PlacementDrive.job_id.ilike(f"%{clean_search}%")
+            )
+        )
+
+    # 3. Department filter (target department eligibility matching allowed_depts)
+    if dept and dept.strip() and dept.strip().upper() != "ALL":
+        query = query.filter(build_dept_filter(dept.strip()))
+
+    # 4. Location filter (case-insensitive partial matching)
+    if location and location.strip():
+        query = query.filter(PlacementDrive.location.ilike(f"%{location.strip()}%"))
+
+    # 5. Registration status filter (OPEN vs CLOSED based on deadline & IST date)
+    today_ist = get_ist_date()
+    if reg_status and reg_status.strip():
+        norm_reg = reg_status.strip().upper()
+        if norm_reg in ["OPEN", "REGISTRATION_OPEN"]:
+            query = query.filter(
+                PlacementDrive.status.in_(ACTIVE_STATUSES),
+                PlacementDrive.deadline >= today_ist
+            )
+        elif norm_reg in ["CLOSED", "REGISTRATION_CLOSED"]:
+            query = query.filter(
+                or_(
+                    PlacementDrive.status == STATUS_REGISTRATION_CLOSED,
+                    and_(
+                        PlacementDrive.status.in_(ACTIVE_STATUSES),
+                        PlacementDrive.deadline < today_ist
+                    )
+                )
+            )
+
+    # 6. Date range filters on interview_date
+    parsed_date_from = parse_date_param(date_from)
+    if parsed_date_from:
+        query = query.filter(PlacementDrive.interview_date >= parsed_date_from)
+    parsed_date_to = parse_date_param(date_to)
+    if parsed_date_to:
+        query = query.filter(PlacementDrive.interview_date <= parsed_date_to)
+
+    # 7. Department-level RBAC for faculty / HOD users
+    if current_user.role in ["faculty", "hod"]:
+        try:
+            scope_info = verify_permission(current_user, "Placement Drives", "VIEW", db)
+            faculty_scope = scope_info.get("scope")
+            faculty_scope_value = scope_info.get("scope_value")
+        except HTTPException:
+            faculty_scope = "NONE"
+            faculty_scope_value = None
+
+        if faculty_scope == "ALL":
+            pass
+        elif faculty_scope == "DEPARTMENT":
+            scope_code = str(faculty_scope_value).upper() if faculty_scope_value else ""
+            if scope_code.isdigit():
+                d_obj = db.query(Department).filter(Department.id == int(scope_code)).first()
+                if d_obj:
+                    scope_code = d_obj.code.upper()
+            if scope_code:
+                query = query.filter(build_dept_filter(scope_code))
+            else:
+                query = query.filter(False)
+        elif faculty_scope == "SECTION":
+            f_profile = current_user.faculty_profile
+            if f_profile and f_profile.department:
+                f_dept_code = f_profile.department.code.upper()
+                query = query.filter(build_dept_filter(f_dept_code))
+            else:
+                query = query.filter(False)
+        else:
+            query = query.filter(False)
+
+    # 8. Pagination bounds and clamping
+    is_paginated = (page is not None) or (page_size is not None) or (limit is not None)
+    safe_page = max(1, page if page is not None else 1)
+    effective_size = page_size if page_size is not None else (limit if limit is not None else 10)
+    safe_limit = max(1, min(100, effective_size))
+    offset = (safe_page - 1) * safe_limit
+
+    # Student-specific restrictions:
+    # 1. Never show DRAFT drives to students
+    # 2. Never show ARCHIVED drives as active opportunities
     if current_user.role == "student":
+        query = query.filter(PlacementDrive.status.notin_([STATUS_DRAFT, STATUS_ARCHIVED]))
         student_profile = db.query(Student).filter(Student.id == current_user.id).first()
         if student_profile:
             applied_drive_ids = {a.drive_id for a in db.query(Application.drive_id).filter(Application.student_id == student_profile.id).all()}
-            filtered_results = []
-            for d in results:
-                # Always show drives the student has actively applied to
-                if d.id in applied_drive_ids or check_student_drive_eligibility(student_profile, d):
-                    filtered_results.append(d)
-            results = filtered_results
-    
+            raw_results = query.order_by(PlacementDrive.interview_date).all()
+            filtered_results = [
+                d for d in raw_results
+                if d.id in applied_drive_ids or check_student_drive_eligibility(student_profile, d)
+            ]
+            total_count = len(filtered_results)
+            if is_paginated:
+                results = filtered_results[offset : offset + safe_limit]
+            else:
+                results = filtered_results
+        else:
+            total_count = 0
+            results = []
+    else:
+        total_count = query.count()
+        if is_paginated:
+            results = query.order_by(PlacementDrive.interview_date).offset(offset).limit(safe_limit).all()
+        else:
+            results = query.order_by(PlacementDrive.interview_date).all()
+
+    total_pages = max(1, (total_count + safe_limit - 1) // safe_limit) if total_count > 0 else 0
+
     drives_list = []
     for d in results:
+        is_reg_open = d.status in ACTIVE_STATUSES and d.deadline >= today_ist
+        is_reg_expired = d.status in ACTIVE_STATUSES and d.deadline < today_ist
+        effective_status_val = d.status
+        if is_reg_expired:
+            effective_status_val = "REGISTRATION_CLOSED"
+        elif d.status in SCHEDULED_STATUSES:
+            effective_status_val = "SCHEDULED"
+        elif d.status in ACTIVE_STATUSES:
+            effective_status_val = "REGISTRATION_OPEN"
+        elif d.status in ONGOING_STATUSES:
+            effective_status_val = "ONGOING"
+        elif d.status in COMPLETED_STATUSES:
+            effective_status_val = "COMPLETED"
+        elif d.status == STATUS_ARCHIVED:
+            effective_status_val = "ARCHIVED"
+        elif d.status == STATUS_DRAFT:
+            effective_status_val = "DRAFT"
+
         drives_list.append({
             "id": d.id,
             "company_id": d.company_id,
-            "company_name": d.company.name,
+            "company_name": d.company.name if d.company else "",
             "role": d.role,
             "package_lpa": d.package_lpa,
             "location": d.location,
@@ -193,6 +405,9 @@ def get_drives(
             "interview_date": d.interview_date,
             "deadline": d.deadline,
             "status": d.status,
+            "effective_status": effective_status_val,
+            "is_registration_open": is_reg_open,
+            "is_archived": d.status == STATUS_ARCHIVED,
             "job_id": d.job_id,
             "batch": d.batch,
             "min_attendance": d.min_attendance,
@@ -206,6 +421,15 @@ def get_drives(
             "jd_pdf_path": d.jd_pdf_path,
             "company_logo": d.company_logo
         })
+
+    if is_paginated:
+        return {
+            "items": drives_list,
+            "total": total_count,
+            "page": safe_page,
+            "page_size": safe_limit,
+            "total_pages": total_pages
+        }
     return drives_list
 
 @router.post("/api/drives")
@@ -237,6 +461,9 @@ def create_drive(drive_data: PlacementDriveCreate, current_user: User = Depends(
     drive_dict = drive_data.model_dump()
     drive_dict["company_id"] = company_id
     drive_dict.pop("company_name", None)
+    drive_dict.pop("effective_status", None)
+    drive_dict.pop("is_registration_open", None)
+    drive_dict.pop("is_archived", None)
         
     drive = PlacementDrive(**drive_dict)
     db.add(drive)
@@ -285,7 +512,7 @@ def get_drive_details(drive_id: int, current_user: User = Depends(get_current_us
     if not drive:
         raise HTTPException(status_code=404, detail="Placement drive not found")
 
-    # Enforce student eligibility check
+    # Enforce student eligibility check and lifecycle visibility
     if current_user.role == "student":
         student_profile = db.query(Student).filter(Student.id == current_user.id).first()
         if not student_profile:
@@ -296,11 +523,57 @@ def get_drive_details(drive_id: int, current_user: User = Depends(get_current_us
             Application.drive_id == drive.id
         ).first() is not None
 
+        # Students cannot inspect DRAFT drives, or ARCHIVED drives unless they have an existing application
+        if drive.status == STATUS_DRAFT or (drive.status == STATUS_ARCHIVED and not has_applied):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Placement drive not found"
+            )
+
         if not has_applied and not check_student_drive_eligibility(student_profile, drive):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied: You do not meet the eligibility criteria for this placement drive"
             )
+
+    # Enforce Faculty / HOD department scoping
+    if current_user.role in ["faculty", "hod"]:
+        try:
+            scope_info = verify_permission(current_user, "Placement Drives", "VIEW", db)
+            faculty_scope = scope_info.get("scope")
+            faculty_scope_value = scope_info.get("scope_value")
+        except HTTPException:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: No active permission to view placement drives"
+            )
+
+        if faculty_scope != "ALL":
+            target_dept_code = None
+            if faculty_scope == "DEPARTMENT":
+                scope_code = str(faculty_scope_value).upper() if faculty_scope_value else ""
+                if scope_code.isdigit():
+                    d_obj = db.query(Department).filter(Department.id == int(scope_code)).first()
+                    if d_obj:
+                        target_dept_code = d_obj.code.upper()
+                else:
+                    target_dept_code = scope_code
+            elif faculty_scope == "SECTION":
+                if current_user.faculty_profile and current_user.faculty_profile.department:
+                    target_dept_code = current_user.faculty_profile.department.code.upper()
+
+            if target_dept_code:
+                allowed_depts = [d.strip().upper() for d in (drive.allowed_depts or "").split(",") if d.strip()]
+                if "ALL" not in allowed_depts and target_dept_code not in allowed_depts:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Access denied: Placement drive outside authorized department scope"
+                    )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: Placement drive outside authorized department scope"
+                )
 
     # Fetch applied students count (filtered by user's permitted student scope)
     applied_list = []
@@ -345,10 +618,29 @@ def get_drive_details(drive_id: int, current_user: User = Depends(get_current_us
         
     eligible_count = eligible_students_query.count()
 
+    today_ist = get_ist_date()
+    is_reg_open = drive.status in ACTIVE_STATUSES and drive.deadline >= today_ist
+    is_reg_expired = drive.status in ACTIVE_STATUSES and drive.deadline < today_ist
+    effective_status = drive.status
+    if is_reg_expired:
+        effective_status = "REGISTRATION_CLOSED"
+    elif drive.status in SCHEDULED_STATUSES:
+        effective_status = "SCHEDULED"
+    elif drive.status in ACTIVE_STATUSES:
+        effective_status = "REGISTRATION_OPEN"
+    elif drive.status in ONGOING_STATUSES:
+        effective_status = "ONGOING"
+    elif drive.status in COMPLETED_STATUSES:
+        effective_status = "COMPLETED"
+    elif drive.status == STATUS_ARCHIVED:
+        effective_status = "ARCHIVED"
+    elif drive.status == STATUS_DRAFT:
+        effective_status = "DRAFT"
+
     return {
         "id": drive.id,
         "company_id": drive.company_id,
-        "company_name": drive.company.name,
+        "company_name": drive.company.name if drive.company else "",
         "role": drive.role,
         "package_lpa": drive.package_lpa,
         "location": drive.location,
@@ -360,6 +652,9 @@ def get_drive_details(drive_id: int, current_user: User = Depends(get_current_us
         "interview_date": drive.interview_date,
         "deadline": drive.deadline,
         "status": drive.status,
+        "effective_status": effective_status,
+        "is_registration_open": is_reg_open,
+        "is_archived": drive.status == STATUS_ARCHIVED,
         "job_id": drive.job_id,
         "batch": drive.batch,
         "min_attendance": drive.min_attendance,
@@ -471,24 +766,29 @@ def update_drive(
     if not company_id:
         raise HTTPException(status_code=400, detail="Either company_id or company_name must be provided")
 
-    # Lifecycle transition checking (Req 15)
+    # Lifecycle transition checking (Req 15 & Batch 2)
     VALID_TRANSITIONS = {
-        "DRAFT": ["PUBLISHED", "Active", "REGISTRATION_OPEN"],
-        "PUBLISHED": ["REGISTRATION_OPEN", "Active", "REGISTRATION_CLOSED", "COMPLETED"],
-        "Active": ["REGISTRATION_OPEN", "REGISTRATION_CLOSED", "ASSESSMENT", "INTERVIEW", "COMPLETED"],
-        "REGISTRATION_OPEN": ["REGISTRATION_CLOSED", "Active", "ASSESSMENT", "COMPLETED"],
-        "REGISTRATION_CLOSED": ["ASSESSMENT", "INTERVIEW", "Active", "COMPLETED"],
-        "ASSESSMENT": ["INTERVIEW", "RESULT_DECLARED", "COMPLETED"],
-        "INTERVIEW": ["RESULT_DECLARED", "COMPLETED"],
+        "DRAFT": ["SCHEDULED", "Upcoming", "UPCOMING", "REGISTRATION_OPEN", "PUBLISHED", "Active", "ARCHIVED"],
+        "SCHEDULED": ["REGISTRATION_OPEN", "PUBLISHED", "Active", "REGISTRATION_CLOSED", "DRAFT", "ARCHIVED"],
+        "Upcoming": ["REGISTRATION_OPEN", "PUBLISHED", "Active", "REGISTRATION_CLOSED", "DRAFT", "ARCHIVED"],
+        "UPCOMING": ["REGISTRATION_OPEN", "PUBLISHED", "Active", "REGISTRATION_CLOSED", "DRAFT", "ARCHIVED"],
+        "PUBLISHED": ["REGISTRATION_OPEN", "Active", "REGISTRATION_CLOSED", "ONGOING", "ASSESSMENT", "INTERVIEW", "COMPLETED", "ARCHIVED"],
+        "Active": ["REGISTRATION_OPEN", "REGISTRATION_CLOSED", "ONGOING", "ASSESSMENT", "INTERVIEW", "COMPLETED", "ARCHIVED"],
+        "REGISTRATION_OPEN": ["REGISTRATION_CLOSED", "Active", "ONGOING", "ASSESSMENT", "INTERVIEW", "COMPLETED", "ARCHIVED"],
+        "REGISTRATION_CLOSED": ["REGISTRATION_OPEN", "Active", "ONGOING", "ASSESSMENT", "INTERVIEW", "COMPLETED", "ARCHIVED"],
+        "ONGOING": ["REGISTRATION_CLOSED", "ASSESSMENT", "INTERVIEW", "RESULT_DECLARED", "COMPLETED", "ARCHIVED"],
+        "ASSESSMENT": ["INTERVIEW", "RESULT_DECLARED", "COMPLETED", "ARCHIVED"],
+        "INTERVIEW": ["RESULT_DECLARED", "COMPLETED", "ARCHIVED"],
         "RESULT_DECLARED": ["COMPLETED", "ARCHIVED"],
         "COMPLETED": ["COMPLETED", "ARCHIVED"],
-        "ARCHIVED": ["ARCHIVED"]
+        "Completed": ["Completed", "ARCHIVED"],
+        "ARCHIVED": ["ARCHIVED", "DRAFT", "REGISTRATION_OPEN", "COMPLETED"]
     }
     old_status = drive.status
     new_status = drive_data.status
     if old_status != new_status:
         allowed_next = VALID_TRANSITIONS.get(old_status, [])
-        if new_status not in allowed_next:
+        if new_status not in allowed_next and new_status != "ARCHIVED":
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid lifecycle status transition from '{old_status}' to '{new_status}'"
@@ -510,6 +810,9 @@ def update_drive(
     drive_dict = drive_data.model_dump()
     drive_dict["company_id"] = company_id
     drive_dict.pop("company_name", None)
+    drive_dict.pop("effective_status", None)
+    drive_dict.pop("is_registration_open", None)
+    drive_dict.pop("is_archived", None)
 
     for k, v in drive_dict.items():
         setattr(drive, k, v)
@@ -596,21 +899,22 @@ def delete_drive(
         log = SystemLog(
             user_email=current_user.email,
             action="ARCHIVE_PLACEMENT_DRIVE",
-            details=f"Placement drive ID {drive.id} ({drive.role}) has {app_count} application(s). Safely ARCHIVED to preserve historical records."
+            details=f"Placement drive ID {drive.id} ({drive.role}) has {app_count} application(s) and {activity_count} placement activity record(s). Safely ARCHIVED to preserve historical records."
         )
         db.add(log)
         db.commit()
         return {
-            "message": f"Placement drive has {app_count} existing application(s). It has been safely ARCHIVED instead of deleted to protect historical records.",
+            "message": f"Placement drive has {app_count} existing application(s) and {activity_count} activity record(s). It has been safely ARCHIVED instead of deleted to protect historical records.",
             "status": "ARCHIVED",
             "applications_preserved": app_count,
+            "activities_preserved": activity_count,
             "archived": True
         }
 
     log = SystemLog(
         user_email=current_user.email,
         action="DELETE_PLACEMENT_DRIVE",
-        details=f"Deleted placement drive ID {drive.id} ({drive.role}) with 0 applications."
+        details=f"Deleted placement drive ID {drive.id} ({drive.role}) with 0 applications and 0 activities."
     )
     db.add(log)
     db.delete(drive)

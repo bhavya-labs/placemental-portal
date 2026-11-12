@@ -356,20 +356,27 @@ def create_correction_request(
 
 @router.get("/correction-requests", response_model=List[CorrectionRequestResponse])
 def get_correction_requests(
+    page: Optional[int] = None,
+    limit: Optional[int] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if current_user.role == "student":
-        return db.query(CorrectionRequest).filter(CorrectionRequest.student_id == current_user.id).order_by(CorrectionRequest.created_at.desc()).all()
-        
-    if current_user.role in ["admin", "tnp"]:
-        return db.query(CorrectionRequest).order_by(CorrectionRequest.created_at.desc()).all()
-        
-    if current_user.role in ["faculty", "hod"]:
+        query = db.query(CorrectionRequest).filter(CorrectionRequest.student_id == current_user.id).order_by(CorrectionRequest.created_at.desc())
+    elif current_user.role in ["admin", "tnp"]:
+        query = db.query(CorrectionRequest).order_by(CorrectionRequest.created_at.desc())
+    elif current_user.role in ["faculty", "hod"]:
         permitted_student_ids = get_permitted_student_query(current_user, db, "VIEW").with_entities(Student.id)
-        return db.query(CorrectionRequest).filter(CorrectionRequest.student_id.in_(permitted_student_ids)).order_by(CorrectionRequest.created_at.desc()).all()
-        
-    return []
+        query = db.query(CorrectionRequest).filter(CorrectionRequest.student_id.in_(permitted_student_ids)).order_by(CorrectionRequest.created_at.desc())
+    else:
+        return []
+
+    if page is not None or limit is not None:
+        safe_page = max(page or 1, 1)
+        safe_limit = min(max(limit or 10, 1), 100)
+        query = query.offset((safe_page - 1) * safe_limit).limit(safe_limit)
+
+    return query.all()
 
 @router.put("/correction-requests/{request_id}/action")
 def action_correction_request(

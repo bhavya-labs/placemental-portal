@@ -8,6 +8,7 @@ from backend.app.models import User, Student, PlacementDrive, Application, Inter
 from backend.app.schemas import ApplicationCreate, ApplicationStatusUpdate, InterviewCreate, FeedbackCreate
 from backend.app.auth import get_current_user, get_current_student, verify_permission, enforce_student_scope
 from backend.app.ml.nlp_feedback import nlp_analyzer
+from backend.app.routers.companies import get_ist_date
 
 router = APIRouter(prefix="", tags=["Applications & Interviews"])
 
@@ -24,14 +25,35 @@ def apply_to_drive(
         raise HTTPException(status_code=404, detail="Placement drive not found")
         
     # Check drive lifecycle status
-    if drive.status in ["ARCHIVED", "CANCELLED", "DELETED", "DRAFT"]:
+    if drive.status == "DRAFT":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Placement drive not found"
+        )
+    if drive.status in ["ARCHIVED", "CANCELLED", "DELETED"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"This placement drive is {drive.status.lower()} and is no longer accepting applications"
+            detail="This placement drive is archived and is no longer accepting applications"
+        )
+    if drive.status in ["SCHEDULED", "Upcoming", "UPCOMING"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Registration for this scheduled drive is not yet open"
+        )
+    if drive.status == "REGISTRATION_CLOSED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Registration for this placement drive has closed"
+        )
+    if drive.status in ["COMPLETED", "Completed"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This placement drive has already concluded"
         )
 
-    # Check deadline
-    if date.today() > drive.deadline:
+    # Check deadline in IST
+    today_ist = get_ist_date()
+    if today_ist > drive.deadline:
         raise HTTPException(status_code=400, detail="Application deadline has passed")
         
     # Check if already applied
@@ -115,7 +137,7 @@ def withdraw_application(
             raise HTTPException(status_code=403, detail="Access denied: You can only withdraw your own applications")
             
         drive = app.drive
-        if drive and drive.deadline and date.today() > drive.deadline:
+        if drive and drive.deadline and get_ist_date() > drive.deadline:
             raise HTTPException(status_code=400, detail="Cannot withdraw application after drive application deadline has passed")
             
         if app.status in ["Selected", "Placed", "Rejected"]:
@@ -216,10 +238,12 @@ def update_application_status(
     db.commit()
 
     # Send Notification to Student
+    company_name = app.drive.company.name if (app.drive and app.drive.company) else "Placement Drive"
+    drive_role = app.drive.role if app.drive else "Role"
     notif = Notification(
         user_id=student.id,
-        title=f"Application Update: {app.drive.company.name}",
-        message=f"Your application status for {app.drive.role} has been updated to {app.status} ({app.current_round})."
+        title=f"Application Update: {company_name}",
+        message=f"Your application status for {drive_role} has been updated to {app.status} ({app.current_round})."
     )
     db.add(notif)
     
@@ -228,7 +252,7 @@ def update_application_status(
         parent_notif = Notification(
             user_id=student.id,
             title="[Parent Alert] Selection Result",
-            message=f"Congratulations! Your ward {student.user.name} has been selected by {app.drive.company.name} for the role of '{app.drive.role}'."
+            message=f"Congratulations! Your ward {student.user.name} has been selected by {company_name} for the role of '{drive_role}'."
         )
         db.add(parent_notif)
     
@@ -270,10 +294,11 @@ def schedule_interview(
     db.refresh(interview)
 
     # Notify student
+    drive_comp = app.drive.company.name if (app.drive and app.drive.company) else "Placement Drive"
     notif = Notification(
         user_id=app.student_id,
         title="New Interview Scheduled",
-        message=f"A new interview round '{interview.round_name}' is scheduled for {app.drive.company.name} on {interview.interview_date.strftime('%Y-%m-%d %H:%M')}."
+        message=f"A new interview round '{interview.round_name}' is scheduled for {drive_comp} on {interview.interview_date.strftime('%Y-%m-%d %H:%M')}."
     )
     db.add(notif)
     
@@ -281,7 +306,7 @@ def schedule_interview(
     parent_notif = Notification(
         user_id=app.student_id,
         title="[Parent Alert] Interview Scheduled",
-        message=f"Important: An interview round '{interview.round_name}' has been scheduled for your ward {app.student.user.name} by {app.drive.company.name} on {interview.interview_date.strftime('%Y-%m-%d %H:%M')}."
+        message=f"Important: An interview round '{interview.round_name}' has been scheduled for your ward {app.student.user.name} by {drive_comp} on {interview.interview_date.strftime('%Y-%m-%d %H:%M')}."
     )
     db.add(parent_notif)
     db.commit()
@@ -300,11 +325,13 @@ def get_student_interviews(
     results = []
     
     for i in interviews:
+        comp_name = i.application.drive.company.name if (i.application and i.application.drive and i.application.drive.company) else "Placement Drive"
+        role_name = i.application.drive.role if (i.application and i.application.drive) else "Role"
         results.append({
             "id": i.id,
             "application_id": i.application_id,
-            "company_name": i.application.drive.company.name,
-            "role": i.application.drive.role,
+            "company_name": comp_name,
+            "role": role_name,
             "round_name": i.round_name,
             "status": i.status,
             "interview_date": i.interview_date,

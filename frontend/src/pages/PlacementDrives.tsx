@@ -67,7 +67,7 @@ export const PlacementDrives: React.FC = () => {
 
   const [editForm, setEditForm] = useState<any>(null);
 
-  const loadData = async () => {
+  const loadData = async (filter?: string) => {
     setLoading(true);
     try {
       const comps = await driveService.getCompanies();
@@ -76,8 +76,8 @@ export const PlacementDrives: React.FC = () => {
         setNewDrive(prev => ({ ...prev, company_id: comps[0].id }));
       }
 
-      const drivesList = await driveService.getDrives();
-      setDrives(drivesList);
+      const drivesList = await driveService.getDrives(filter);
+      setDrives(Array.isArray(drivesList) ? drivesList : drivesList?.items || []);
     } catch (err) {
       console.error('Failed to load placement drives data', err);
     } finally {
@@ -285,17 +285,22 @@ export const PlacementDrives: React.FC = () => {
       alert('Elevated action: Only administrators have permissions to delete placement drives.');
       return;
     }
-    if (!window.confirm('Are you sure you want to delete this placement drive? All applications and interview schedules mapping to this drive will be scrubbed.')) {
+    if (!window.confirm('Are you sure you want to remove this placement drive?\n\nInstitutional Safety Rule: Drives with existing candidate applications or activities will be safely ARCHIVED rather than hard-deleted to protect all historical records. Drives with zero associated records will be permanently removed.')) {
       return;
     }
     try {
-      await driveService.deleteDrive(id);
-      alert('Drive record deleted.');
+      const res = await driveService.deleteDrive(id);
+      alert(res?.message || 'Placement drive updated successfully.');
       setSelectedDriveId(null);
-      loadData();
+      loadData(statusFilter || undefined);
     } catch (err: any) {
-      alert(err.response?.data?.detail || 'Failed to delete drive record.');
+      alert(err.response?.data?.detail || 'Failed to remove drive record.');
     }
+  };
+
+  const handleStatusFilterChange = (val: string) => {
+    setStatusFilter(val);
+    loadData(val || undefined);
   };
 
   const handleStatusUpdate = async (applicationId: number, status: 'Selected' | 'Rejected' | 'Shortlisted', round: string) => {
@@ -313,11 +318,14 @@ export const PlacementDrives: React.FC = () => {
   };
 
   // Filter drives list based on status category & search
-  const filteredDrives = drives.filter(d => {
-    const matchesSearch = d.company_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          d.role.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === '' || d.status === statusFilter;
-    return matchesSearch && matchesStatus;
+  const driveItems = Array.isArray(drives) ? drives : ((drives as any)?.items || []);
+  const filteredDrives = driveItems.filter((d: any) => {
+    const q = searchQuery.toLowerCase();
+    const matchesSearch = 
+      (d.company_name || '').toLowerCase().includes(q) || 
+      (d.role || '').toLowerCase().includes(q) ||
+      (d.job_id || '').toLowerCase().includes(q);
+    return matchesSearch;
   });
 
   return (
@@ -371,18 +379,21 @@ export const PlacementDrives: React.FC = () => {
             <Filter size={14} className="text-gov-blue" />
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => handleStatusFilterChange(e.target.value)}
               className="border border-gov-border rounded p-1.5 bg-white text-slate-700 dark:bg-slate-955 dark:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-gov-blue"
             >
-              <option value="">All Drives Status</option>
-              <option value="DRAFT">DRAFT</option>
-              <option value="PUBLISHED">PUBLISHED</option>
+              <option value="">All Drives (Active & Scheduled)</option>
+              <option value="SCHEDULED">SCHEDULED (Upcoming)</option>
               <option value="REGISTRATION_OPEN">REGISTRATION_OPEN</option>
               <option value="REGISTRATION_CLOSED">REGISTRATION_CLOSED</option>
+              <option value="PUBLISHED">PUBLISHED</option>
+              <option value="ONGOING">ONGOING</option>
               <option value="ASSESSMENT">ASSESSMENT</option>
               <option value="INTERVIEW">INTERVIEW</option>
               <option value="RESULT_DECLARED">RESULT_DECLARED</option>
               <option value="COMPLETED">COMPLETED</option>
+              <option value="ARCHIVED">ARCHIVED</option>
+              <option value="DRAFT">DRAFT</option>
             </select>
           </div>
         </div>
@@ -792,8 +803,9 @@ export const PlacementDrives: React.FC = () => {
                   className="mt-1 w-full p-2 border border-gov-border rounded bg-white dark:bg-slate-955 dark:text-slate-100"
                 >
                   <option value="DRAFT">DRAFT</option>
-                  <option value="PUBLISHED">PUBLISHED</option>
+                  <option value="SCHEDULED">SCHEDULED (Upcoming)</option>
                   <option value="REGISTRATION_OPEN">REGISTRATION_OPEN</option>
+                  <option value="PUBLISHED">PUBLISHED</option>
                 </select>
               </div>
             </div>
@@ -1023,7 +1035,7 @@ export const PlacementDrives: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <div>
                 <label htmlFor="edit-drive-batch" className="block font-bold text-slate-500 uppercase">Target Batch *</label>
                 <input
@@ -1045,6 +1057,26 @@ export const PlacementDrives: React.FC = () => {
                   onChange={(e) => setEditForm({ ...editForm, min_attendance: Number(e.target.value) })}
                   className="mt-1 w-full p-2 border border-gov-border rounded dark:bg-slate-955 dark:text-slate-100"
                 />
+              </div>
+              <div>
+                <label htmlFor="edit-drive-status" className="block font-bold text-slate-500 uppercase">Status *</label>
+                <select
+                  id="edit-drive-status"
+                  value={editForm.status}
+                  onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                  className="mt-1 w-full p-2 border border-gov-border rounded bg-white dark:bg-slate-955 dark:text-slate-100"
+                >
+                  <option value="DRAFT">DRAFT</option>
+                  <option value="SCHEDULED">SCHEDULED (Upcoming)</option>
+                  <option value="REGISTRATION_OPEN">REGISTRATION_OPEN</option>
+                  <option value="REGISTRATION_CLOSED">REGISTRATION_CLOSED</option>
+                  <option value="ONGOING">ONGOING</option>
+                  <option value="ASSESSMENT">ASSESSMENT</option>
+                  <option value="INTERVIEW">INTERVIEW</option>
+                  <option value="RESULT_DECLARED">RESULT_DECLARED</option>
+                  <option value="COMPLETED">COMPLETED</option>
+                  <option value="ARCHIVED">ARCHIVED</option>
+                </select>
               </div>
             </div>
 

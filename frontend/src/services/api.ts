@@ -253,10 +253,26 @@ export const driveService = {
     const response = await api.get('/api/public/active-drives');
     return response.data;
   },
-  getDrives: async (statusFilter?: string) => {
-    const response = await api.get('/api/drives', {
-      params: statusFilter ? { status_filter: statusFilter } : {}
-    });
+  getDrives: async (paramsOrFilter?: string | {
+    status_filter?: string;
+    status?: string;
+    search?: string;
+    dept?: string;
+    location?: string;
+    reg_status?: string;
+    date_from?: string;
+    date_to?: string;
+    page?: number;
+    page_size?: number;
+    limit?: number;
+  }) => {
+    let params: any = {};
+    if (typeof paramsOrFilter === 'string') {
+      params = { status_filter: paramsOrFilter };
+    } else if (paramsOrFilter) {
+      params = paramsOrFilter;
+    }
+    const response = await api.get('/api/drives', { params });
     return response.data;
   },
   createDrive: async (data: any) => {
@@ -273,6 +289,10 @@ export const driveService = {
   },
   deleteDrive: async (id: number) => {
     const response = await api.delete(`/api/drives/${id}`);
+    return response.data;
+  },
+  archiveDrive: async (id: number) => {
+    const response = await api.put(`/api/drives/${id}/archive`);
     return response.data;
   },
   deleteCompany: async (id: number) => {
@@ -403,8 +423,8 @@ export const correctionService = {
     const response = await api.post('/api/students/correction-requests', data);
     return response.data;
   },
-  getRequests: async () => {
-    const response = await api.get('/api/students/correction-requests');
+  getRequests: async (params?: { page?: number; limit?: number }) => {
+    const response = await api.get('/api/students/correction-requests', { params });
     return response.data;
   },
   actionRequest: async (id: number, status: string) => {
