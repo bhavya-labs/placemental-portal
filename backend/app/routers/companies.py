@@ -372,8 +372,9 @@ def get_drives(
 
     drives_list = []
     for d in results:
-        is_reg_open = d.status in ACTIVE_STATUSES and d.deadline >= today_ist
-        is_reg_expired = d.status in ACTIVE_STATUSES and d.deadline < today_ist
+        # Treat drives with no deadline as having registration permanently open (admin/data-entry gap)
+        is_reg_open = d.status in ACTIVE_STATUSES and (d.deadline is None or d.deadline >= today_ist)
+        is_reg_expired = d.status in ACTIVE_STATUSES and d.deadline is not None and d.deadline < today_ist
         effective_status_val = d.status
         if is_reg_expired:
             effective_status_val = "REGISTRATION_CLOSED"

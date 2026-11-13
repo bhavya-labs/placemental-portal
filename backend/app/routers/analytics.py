@@ -293,14 +293,14 @@ def get_reports_data(
         for app in apps:
             results.append({
                 "Student Name": app.student.user.name,
-                "Department": app.student.department.code,
-                "Company": app.drive.company.name,
-                "Job Role": app.drive.role,
-                "LPA (Lakhs)": app.drive.package_lpa,
-                "Interview Date": app.drive.interview_date.strftime("%Y-%m-%d"),
+                "Department": app.student.department.code if app.student.department else "N/A",
+                "Company": app.drive.company.name if app.drive and app.drive.company else "N/A",
+                "Job Role": app.drive.role if app.drive else "N/A",
+                "LPA (Lakhs)": app.drive.package_lpa if app.drive else 0.0,
+                "Interview Date": app.drive.interview_date.strftime("%Y-%m-%d") if app.drive and app.drive.interview_date else "N/A",
                 "Process Round": app.current_round,
                 "Application Status": app.status,
-                "Joining Status": app.joining_status
+                "Joining Status": app.joining_status or "N/A"
             })
         return results
 
