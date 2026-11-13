@@ -162,10 +162,11 @@ class FacultyCreate(FacultyBase):
 
 class FacultyCreateRequest(BaseModel):
     name: str
-    email: str
+    email: EmailStr
     password: str = "password123"
-    dept_id: int
-    designation: str
+    dept_id: Optional[int] = None
+    designation: Optional[str] = None
+    role: Optional[str] = "faculty"
 
 class FacultyUpdateRequest(BaseModel):
     name: str

@@ -246,9 +246,9 @@ def register_parent_contact(
 ):
     """
     Authorized parent registration endpoint.
-    Accessible only by Admin, Faculty coordinators, or the authenticated student themselves.
+    Accessible only by Admin, Faculty coordinators, HOD, TNP, or the authenticated student themselves.
     """
-    if current_user.role not in ["admin", "faculty", "hod", "tpo", "student"]:
+    if current_user.role not in ["admin", "faculty", "hod", "tnp", "student"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied: Unauthorized role to register parent contacts"

@@ -167,12 +167,12 @@ def get_profile(current_user: User = Depends(get_current_user), db: Session = De
             "profile_completed": s.profile_completed,
             "verification_status": s.verification_status
         }
-    elif current_user.role == "faculty" and current_user.faculty_profile:
+    elif current_user.role in ["faculty", "hod"] and current_user.faculty_profile:
         f = current_user.faculty_profile
         response["faculty_profile"] = {
             "dept_id": f.dept_id,
-            "dept_name": f.department.name,
-            "dept_code": f.department.code,
+            "dept_name": f.department.name if f.department else None,
+            "dept_code": f.department.code if f.department else None,
             "designation": f.designation
         }
 
@@ -191,41 +191,124 @@ def get_faculty_accounts(current_user: User = Depends(get_current_user), db: Ses
             "id": f.id,
             "name": f.user.name,
             "email": f.user.email,
+            "role": f.user.role,
             "dept_id": f.dept_id,
-            "dept_code": f.department.code,
-            "dept_name": f.department.name,
+            "dept_code": f.department.code if f.department else "N/A",
+            "dept_name": f.department.name if f.department else "N/A",
             "designation": f.designation
         })
     return results
 
 @router.post("/faculty")
-def create_faculty_account(payload: FacultyCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@router.post("/staff")
+def create_faculty_account(
+    payload: FacultyCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    existing = db.query(User).filter(User.email == payload.email).first()
+        raise HTTPException(status_code=403, detail="Access denied: Admin role required")
+
+    clean_name = payload.name.strip() if payload.name else ""
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Name cannot be empty")
+
+    clean_email = str(payload.email).strip().lower() if payload.email else ""
+    if not clean_email or "@" not in clean_email:
+        raise HTTPException(status_code=400, detail="Valid email address is required")
+
+    clean_password = payload.password.strip() if payload.password else ""
+    if len(clean_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
+
+    target_role = (payload.role or "faculty").strip().lower()
+    if target_role not in ["faculty", "hod", "tnp"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid staff role '{target_role}'. Allowed roles: 'faculty', 'hod', 'tnp'."
+        )
+
+    # 1. Pre-insertion validation: Duplicate email check (case-insensitive)
+    existing = db.query(User).filter(User.email.ilike(clean_email)).first()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-        
-    pwd_hash = get_password_hash(payload.password)
-    user_rec = User(
-        email=payload.email,
-        password_hash=pwd_hash,
-        name=payload.name,
-        role="faculty"
-    )
-    db.add(user_rec)
-    db.commit()
-    
-    faculty_rec = Faculty(
-        id=user_rec.id,
-        dept_id=payload.dept_id,
-        designation=payload.designation
-    )
-    db.add(faculty_rec)
-    db.commit()
-    
-    return {"message": "Faculty account successfully registered!", "faculty_id": user_rec.id}
+
+    # 2. Pre-insertion validation: Department and HOD uniqueness checks
+    clean_designation = payload.designation.strip() if payload.designation else None
+    target_dept = None
+
+    if target_role in ["faculty", "hod"]:
+        if not payload.dept_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Department ID is required for {target_role.upper()} accounts"
+            )
+
+        target_dept = db.query(Department).filter(Department.id == payload.dept_id).first()
+        if not target_dept:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid department ID: {payload.dept_id} does not exist"
+            )
+
+        if target_role == "hod":
+            existing_hod = db.query(Faculty).join(User, Faculty.id == User.id).filter(
+                Faculty.dept_id == payload.dept_id,
+                User.role == "hod"
+            ).first()
+            if existing_hod:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Department '{target_dept.name}' already has an assigned Head of Department (HOD)."
+                )
+
+        if not clean_designation:
+            clean_designation = "Head of Department" if target_role == "hod" else "Faculty Coordinator"
+
+    # 3. Transaction-safe database execution with explicit rollback on error
+    try:
+        pwd_hash = get_password_hash(clean_password)
+        user_rec = User(
+            email=clean_email,
+            password_hash=pwd_hash,
+            name=clean_name,
+            role=target_role
+        )
+        db.add(user_rec)
+        db.flush()
+
+        if target_role in ["faculty", "hod"]:
+            faculty_rec = Faculty(
+                id=user_rec.id,
+                dept_id=payload.dept_id,
+                designation=clean_designation
+            )
+            db.add(faculty_rec)
+
+        db.commit()
+        db.refresh(user_rec)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to provision staff account: {str(e)}")
+
+    result = {
+        "message": f"{target_role.upper()} account successfully registered!",
+        "id": user_rec.id,
+        "faculty_id": user_rec.id,
+        "email": user_rec.email,
+        "name": user_rec.name,
+        "role": user_rec.role
+    }
+    if target_role in ["faculty", "hod"] and target_dept:
+        result["dept_id"] = payload.dept_id
+        result["dept_name"] = target_dept.name
+        result["dept_code"] = target_dept.code
+        result["designation"] = clean_designation
+
+    return result
 
 @router.put("/faculty/{faculty_id}")
 def update_faculty_account(

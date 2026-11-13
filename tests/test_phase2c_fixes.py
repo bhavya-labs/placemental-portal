@@ -438,7 +438,7 @@ def test_parent_registration_department_authorization(client, db_session, admin_
     u_fac_cse = User(email="fac.cse.coord@college.edu", name="CSE Coordinator", role="faculty", password_hash=shared_pwd)
     u_hod_cse = User(email="hod.cse.coord@college.edu", name="CSE HOD", role="hod", password_hash=shared_pwd)
     u_fac_none = User(email="fac.unassigned@college.edu", name="Unassigned Faculty", role="faculty", password_hash=shared_pwd)
-    u_tpo = User(email="tpo.officer@college.edu", name="TPO Officer", role="tpo", password_hash=shared_pwd)
+    u_tpo = User(email="tpo.officer@college.edu", name="TPO Officer", role="tnp", password_hash=shared_pwd)
     db_session.add_all([u_fac_cse, u_hod_cse, u_fac_none, u_tpo])
     db_session.flush()
 
@@ -449,7 +449,7 @@ def test_parent_registration_department_authorization(client, db_session, admin_
     fac_cse_token = create_access_token(data={"sub": u_fac_cse.email, "role": "faculty"})
     hod_cse_token = create_access_token(data={"sub": u_hod_cse.email, "role": "hod"})
     fac_none_token = create_access_token(data={"sub": u_fac_none.email, "role": "faculty"})
-    tpo_token = create_access_token(data={"sub": "tpo.officer@college.edu", "role": "tpo"})
+    tpo_token = create_access_token(data={"sub": "tpo.officer@college.edu", "role": "tnp"})
     student_cse_token = create_access_token(data={"sub": u_cse.email, "role": "student"})
 
     fac_cse_headers = {"Authorization": f"Bearer {fac_cse_token}"}

@@ -741,22 +741,22 @@ def verify_student_profile(
 ):
     """
     Authorized staff verification of student profiles.
-    Accessible only by Admin, Faculty coordinators, HOD, or TPO roles within their departmental scope.
+    Accessible only by Admin, Faculty coordinators, HOD, or TNP roles within their departmental scope.
     """
-    if current_user.role not in ["admin", "faculty", "hod", "tpo"]:
+    if current_user.role not in ["admin", "faculty", "hod", "tnp"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: Only authorized faculty coordinators, HOD, TPO or administrators can verify student profiles."
+            detail="Access denied: Only authorized faculty coordinators, HOD, TNP or administrators can verify student profiles."
         )
 
     student = db.query(Student).filter(Student.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student profile not found")
 
-    # Admins have global authority; Faculty/HOD coordinators verify students in their department
+    # Admins and TNP have global authority; Faculty/HOD coordinators verify students in their department
     if current_user.role in ["faculty", "hod"]:
         faculty_dept_id = current_user.faculty_profile.dept_id if current_user.faculty_profile else None
-        if faculty_dept_id and student.dept_id != faculty_dept_id:
+        if not faculty_dept_id or student.dept_id != faculty_dept_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied: Faculty coordinator can only verify students in their assigned department."
