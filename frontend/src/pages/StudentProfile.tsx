@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { studentService, aiService, driveService } from '../services/api';
+import { studentService, aiService, driveService, prewarmBackend } from '../services/api';
 import { CardSkeleton } from '../components/LoadingSkeleton';
 import {
   User,
@@ -57,14 +57,23 @@ export const StudentProfile: React.FC = () => {
     setTimeout(() => setToast(null), 5000);
   };
 
-  const loadProfile = async () => {
+  const loadProfile = async (silent: boolean = false) => {
     if (!user) return;
 
-    setLoading(true);
+    if (!silent) {
+      setLoading(true);
+    }
 
     try {
-      const details = await studentService.getStudentById(user.id);
+      const [details, activeDrives] = await Promise.all([
+        studentService.getStudentById(user.id),
+        driveService.getDrives('Active').catch((e) => {
+          console.error('Failed to load active drives', e);
+          return [];
+        }),
+      ]);
       setStudentDetails(details);
+      setDrives(activeDrives || []);
 
       let skillsList: string[] = [];
 
@@ -109,19 +118,18 @@ export const StudentProfile: React.FC = () => {
           ...parsedAnalysis,
         });
       }
-
-      try {
-        const activeDrives = await driveService.getDrives('Active');
-        setDrives(activeDrives || []);
-      } catch (e) {
-        console.error('Failed to load active drives', e);
-      }
     } catch (err) {
       console.error('Failed to load profile details', err);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
+
+  useEffect(() => {
+    prewarmBackend();
+  }, []);
 
   useEffect(() => {
     loadProfile();
@@ -212,7 +220,7 @@ export const StudentProfile: React.FC = () => {
 
       showToast('Resume evaluation complete!', 'success');
 
-      loadProfile();
+      loadProfile(true);
     } catch (err: any) {
       showToast(
         err.response?.data?.detail ||
