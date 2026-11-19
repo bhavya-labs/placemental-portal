@@ -367,11 +367,7 @@ export const aiService = {
     return response.data;
   },
   uploadResume: async (formData: FormData) => {
-    const response = await api.post('/api/ai/resume/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    });
+    const response = await api.post('/api/ai/resume/upload', formData);
     return response.data;
   },
   getJobMatch: async (driveId: number) => {
